@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Label Scanner — Novameta</title>
+<meta name="theme-color" content="#111112">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ SCAN ============ -->
+  <section id="screen-scan" class="screen active">
+    <video id="scan-video" autoplay playsinline muted></video>
+    <canvas id="scan-canvas" style="display:none"></canvas>
+
+    <div class="scan-topbar">
+      <div class="mode-tabs">
+        <button id="tab-qr" class="active" data-mode="qr">QR</button>
+        <button id="tab-ocr" data-mode="ocr">OCR fallback</button>
+      </div>
+    </div>
+
+    <div class="scan-frame-wrap">
+      <div class="scan-frame">
+        <i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i>
+        <div class="scan-sweep"></div>
+      </div>
+    </div>
+
+    <div id="scan-status" class="scan-status">
+      <div id="scan-hunt" class="scan-hunt">Point at the QR code</div>
+      <div id="scan-locked" class="scan-locked" style="display:none">
+        <span class="scan-locked-badge">&#10003; QR decoded</span>
+        <span id="scan-raw" class="scan-raw"></span>
+      </div>
+    </div>
+
+    <div id="scan-error" class="scan-error">
+      <span class="scan-error-badge">&#9888; Couldn't read 4 fields</span>
+      <span id="scan-error-raw" class="scan-error-raw"></span>
+    </div>
+
+    <div class="scan-bottom">
+      <button id="shutter-btn" class="shutter-btn" aria-label="Capture"></button>
+      <button id="manual-link" class="manual-link">Enter manually</button>
+    </div>
+
+    <div id="camera-permission-note" class="camera-permission-note">
+      <div class="cam-icon">&#128247;</div>
+      <p id="camera-permission-text">This app needs camera access to scan the QR code on the label.</p>
+      <button id="camera-retry-btn">Allow camera</button>
+      <button id="camera-manual-fallback" class="manual-link" style="color:rgba(255,255,255,.7)">Enter manually instead</button>
+    </div>
+  </section>
+
+  <!-- ============ MANUAL ENTRY ============ -->
+  <section id="screen-manual" class="screen">
+    <div class="top-header">
+      <button class="back-btn" id="manual-back-btn" aria-label="Back">&#8592;</button>
+      <div class="title-block">
+        <div class="kicker">Manual entry</div>
+        <div class="title">Enter label values</div>
+      </div>
+    </div>
+    <div class="body">
+      <div id="manual-info-banner" class="info-banner" style="display:none">
+        OCR reading isn't available in this build yet — enter the four values printed on the label below.
+      </div>
+      <div class="field-group">
+        <label for="m-job">Job number</label>
+        <input id="m-job" type="text" autocomplete="off" placeholder="e.g. 010127-1-1">
+      </div>
+      <div class="field-group">
+        <label for="m-mfg">Manufacturing code</label>
+        <input id="m-mfg" type="text" autocomplete="off" placeholder="e.g. 10-D1-61">
+      </div>
+      <div class="field-group">
+        <label for="m-assy">Assembly</label>
+        <input id="m-assy" type="text" autocomplete="off" placeholder="e.g. 26-29813-01.00.00 SB_A">
+      </div>
+      <div class="field-group">
+        <label for="m-part">Part number</label>
+        <input id="m-part" type="text" autocomplete="off" placeholder="e.g. 26-29819-01.00.01_A">
+      </div>
+      <button id="manual-continue-btn" class="primary-btn" disabled>Continue</button>
+    </div>
+  </section>
+
+  <!-- ============ REVIEW ============ -->
+  <section id="screen-review" class="screen">
+    <div class="top-header">
+      <button class="back-btn" id="review-back-btn" aria-label="Back">&#8592;</button>
+      <div class="title-block">
+        <div id="review-source-note" class="kicker">QR &middot; 4 fields read</div>
+        <div class="title">Report a defect</div>
+      </div>
+      <span class="shift-pill">Shift A</span>
+    </div>
+
+    <div class="body">
+      <div id="qr-error-banner" class="qr-error-banner"></div>
+
+      <div class="card">
+        <div class="card-head">
+          <span id="fields-card-title" class="card-title">From the QR code</span>
+          <span id="fields-badge" class="badge-count ok">4 / 4 fields</span>
+        </div>
+        <div id="fields-list"></div>
+        <div id="raw-row" class="raw-row"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><span class="card-title">Defect is on</span></div>
+        <div id="target-row" class="target-row"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Photos</span>
+          <span id="photo-count-badge" class="badge-count neutral">1 / 6</span>
+        </div>
+        <div id="photos-grid" class="photos-grid"></div>
+        <input type="file" id="photo-input" accept="image/*" capture="environment" style="display:none">
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">What is wrong</span>
+          <button id="open-library-btn" class="edit-list-btn">Edit list</button>
+        </div>
+        <div id="reason-chips" class="reason-chips"></div>
+        <div class="note-wrap">
+          <textarea id="note-input" rows="3" placeholder="Porosity along the long weld seam, ~200 mm from the left edge."></textarea>
+        </div>
+      </div>
+
+      <button id="payload-toggle-btn" class="payload-toggle">Show request body</button>
+      <pre id="payload-pre" class="payload-pre"></pre>
+    </div>
+
+    <div class="submit-bar">
+      <button id="submit-btn" class="primary-btn">Create issue in YouTrack</button>
+    </div>
+
+    <div id="library-sheet-backdrop" class="sheet-backdrop">
+      <div class="sheet">
+        <div class="sheet-head">
+          <div style="flex:1">
+            <div class="sh-title">Defect reasons</div>
+            <div class="sh-sub">Shared by the whole shop floor &middot; edits sync to everyone</div>
+          </div>
+          <button id="close-library-btn">Done</button>
+        </div>
+        <div id="library-list" class="sheet-list"></div>
+        <div class="sheet-add">
+          <input id="reason-draft-input" placeholder="Add a reason&hellip;">
+          <button id="add-reason-btn">Add</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ POSTING ============ -->
+  <section id="screen-posting" class="screen">
+    <div class="spinner"></div>
+    <div id="post-stage" class="post-stage">POST /api/issues</div>
+  </section>
+
+  <!-- ============ DONE ============ -->
+  <section id="screen-done" class="screen">
+    <div class="done-body">
+      <div class="done-check">&#10003;</div>
+      <div class="done-title">Issue created</div>
+      <div id="done-summary" class="done-summary"></div>
+      <div id="done-key" class="done-key"></div>
+    </div>
+    <div class="done-actions">
+      <button id="scan-next-btn" class="primary-btn">Scan next label</button>
+      <button id="open-youtrack-btn" class="secondary-btn">Open in YouTrack</button>
+      <div id="mock-note" class="mock-note">This is a test build — no real YouTrack connection yet, so there's nothing to open. In the finished app this would jump straight to the ticket.</div>
+    </div>
+  </section>
+
+</div>
+<script src="jsQR.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "Label Scanner — Novameta",
+  "short_name": "Label Scanner",
+  "description": "Scan a job label QR code and file a defect report.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#111112",
+  "theme_color": "#111112",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
