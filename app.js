@@ -121,10 +121,18 @@
   }
 
   // ---------------------------------------------------------------------
-  // QR payload parsing — "%job;mfg;assy;part%", exactly 4 slots or reject
+  // QR payload parsing — "%job;mfg;assy;part%", exactly 4 slots or reject.
+  //
+  // A real scanned label came back as "$BANDAY$%010127-1-1;10-D1-61;...%" —
+  // there's a prefix ("$BANDAY$", likely a test/sample-print marker) before
+  // the %...% payload. So this only requires the %...% block to appear
+  // somewhere in the scanned text, rather than requiring the whole string
+  // to be exactly "%...%" — anything outside the percent markers (a prefix,
+  // a trailing newline the scanner added, etc.) is simply ignored. The
+  // "exactly four slots inside" guard is unchanged.
   // ---------------------------------------------------------------------
   function parseQr(raw) {
-    var m = /^%(.*)%$/.exec((raw || '').trim());
+    var m = /%([^%]*)%/.exec((raw || '').trim());
     if (!m) return null;
     var parts = m[1].split(';').map(function (s) { return s.trim(); });
     if (parts.length !== 4) return null;
