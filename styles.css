@@ -355,7 +355,8 @@ input, textarea {
 }
 .target-btn.selected { background: var(--accent-tint-bg); border: 1.5px solid var(--accent); box-shadow: 0 0 0 3px rgba(217, 119, 87, .12); }
 .target-btn .t-kind { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); display: block; }
-.target-btn .t-code { font: 600 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); word-break: break-all; text-align: left; display: block; }
+.target-btn .t-code { font: 600 11.5px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); word-break: normal; overflow-wrap: break-word; text-align: left; display: block; }
+.target-row.has-three .target-btn .t-code { font-size: 10.5px; }
 
 .photos-grid { padding: 12px 14px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .photo-tile {
