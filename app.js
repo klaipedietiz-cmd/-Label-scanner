@@ -396,10 +396,14 @@
 
     $('#raw-row').textContent = state.rawQr ? state.rawQr : '(entered manually — no raw QR string)';
 
-    $('#target-row').innerHTML = [
-      { id: 'assy', kind: 'Assembly', code: v.assy },
-      { id: 'part', kind: 'Part', code: v.part },
-    ].map(function (t) {
+    var subassyCode = deriveSubassembly(v.part);
+    if (state.target === 'subassy' && !subassyCode) state.target = 'part'; // was selected, no longer derivable
+    var targets = [{ id: 'assy', kind: 'Assembly', code: v.assy }];
+    if (subassyCode) targets.push({ id: 'subassy', kind: 'Subassembly', code: subassyCode });
+    targets.push({ id: 'part', kind: 'Part', code: v.part });
+
+    $('#target-row').classList.toggle('has-three', targets.length === 3);
+    $('#target-row').innerHTML = targets.map(function (t) {
       var sel = state.target === t.id;
       return '<button class="target-btn' + (sel ? ' selected' : '') + '" data-target="' + t.id + '">' +
         '<span class="t-kind">' + esc(t.kind) + '</span><span class="t-code">' + esc(t.code || '—') + '</span></button>';
@@ -557,15 +561,37 @@
   });
 
   // ---------------------------------------------------------------------
+  // Subassembly derivation — a pattern spotted from a real scanned label:
+  // part "26-29819-01.00.01_A" -> assembly "26-29819-01.00.00 SB_A" on that
+  // same label. Generalized: drop the part number's final dot-segment and
+  // append ".00 SB_A". Confirmed against exactly two real examples so far —
+  // worth double-checking with whoever owns Novameta's part-numbering
+  // scheme before this feeds a real submitted ticket, but safe to offer
+  // as a selectable option here since it's just hidden when it can't be
+  // derived.
+  // ---------------------------------------------------------------------
+  function deriveSubassembly(part) {
+    var p = (part || '').trim();
+    var idx = p.lastIndexOf('.');
+    if (idx < 1) return null; // no dot (or dot is the very first char) — not derivable
+    var base = p.slice(0, idx);
+    if (!base) return null;
+    return base + '.00 SB_A';
+  }
+
+  // ---------------------------------------------------------------------
   // Payload — the exact request body the design spec shows (slide 6 / mock)
   // ---------------------------------------------------------------------
+  var TARGET_WORDS = { assy: 'Assembly', subassy: 'Subassembly', part: 'Part' };
   function targetCode() {
     if (!state.values) return '';
-    return state.target === 'part' ? state.values.part : state.values.assy;
+    if (state.target === 'part') return state.values.part;
+    if (state.target === 'subassy') return deriveSubassembly(state.values.part) || '';
+    return state.values.assy;
   }
   function payloadText() {
     var v = state.values || { job: '', mfg: '', assy: '', part: '' };
-    var word = state.target === 'part' ? 'Part' : 'Assembly';
+    var word = TARGET_WORDS[state.target] || 'Assembly';
     var body = {
       project: { id: '0-12' },
       summary: (state.kind || '') + ' — ' + targetCode() + ' — job ' + v.job,
