@@ -18,6 +18,12 @@
   var LABELS = { job: 'Job number', mfg: 'Manuf. code', assy: 'Assembly', part: 'Part no.' };
   var DEFAULT_REASONS = ['Weld defect', 'Dimension out of tol.', 'Surface finish', 'Material fault',
     'Wrong part', 'Transport damage', 'Missing feature', 'Paint / coating'];
+  // "Būsena" (State) and "Būklė" — real YouTrack QMS project custom fields, confirmed
+  // 2026-08-27 via a live GET on an existing issue. Būsena has 5 possible values in
+  // YouTrack; per the operator, only these 2 are ever chosen at report time (the rest
+  // are used later in the workflow by other staff). Būklė's 3 values are all offered.
+  var BUSENA_OPTIONS = ['Technologui išrašyti', 'Perduota atsakingam asm.'];
+  var BUKLE_OPTIONS = ['Taisyti (arba trūksta)', 'Brokas', 'Informacinis'];
   var REASONS_KEY = 'nm_defect_reasons';
   var USAGE_KEY = 'nm_defect_reason_usage';
   var MAX_PHOTOS = 6;
@@ -41,6 +47,8 @@
     target: 'part',          // 'assy' | 'part'
     kind: null,              // selected defect reason
     note: '',
+    busena: null,            // required — one of BUSENA_OPTIONS
+    bukle: null,             // required — one of BUKLE_OPTIONS
 
     photos: [],              // [{ id, label, dataUrl, removable }]
     nextPhotoNum: 1,
@@ -356,6 +364,8 @@
     state.editingField = null;
     state.target = 'part';
     state.note = '';
+    state.busena = null;
+    state.bukle = null;
     state.showPayload = false;
     var ordered = orderedReasons();
     state.kind = ordered[0] || state.reasons[0] || null;
@@ -411,6 +421,8 @@
 
     renderPhotos();
     renderReasonChips();
+    renderChoiceRow('#busena-row', BUSENA_OPTIONS, state.busena, 'busena');
+    renderChoiceRow('#bukle-row', BUKLE_OPTIONS, state.bukle, 'bukle');
 
     $('#note-input').value = state.note;
     $('#payload-pre').textContent = payloadText();
@@ -418,15 +430,26 @@
     $('#payload-pre').classList.toggle('show', state.showPayload);
 
     var errBanner = $('#qr-error-banner');
-    if (filled < 4) {
-      errBanner.textContent = 'Some fields are empty — fill them in before creating the issue.';
+    var missing = [];
+    if (filled < 4) missing.push('fill in the empty fields');
+    if (!state.busena) missing.push('choose Būsena');
+    if (!state.bukle) missing.push('choose Būklė');
+    if (missing.length) {
+      errBanner.textContent = 'Before creating the issue: ' + missing.join(', ') + '.';
       errBanner.classList.add('show');
     } else {
       errBanner.classList.remove('show');
     }
-    $('#submit-btn').disabled = state.posting || filled < 4;
+    $('#submit-btn').disabled = state.posting || filled < 4 || !state.busena || !state.bukle;
 
     renderLibrary();
+  }
+
+  function renderChoiceRow(containerSel, options, current, attr) {
+    $(containerSel).innerHTML = options.map(function (opt) {
+      var sel = current === opt;
+      return '<button class="choice-chip' + (sel ? ' selected' : '') + '" data-' + attr + '="' + esc(opt) + '">' + esc(opt) + '</button>';
+    }).join('');
   }
 
   function renderPhotos() {
@@ -484,6 +507,14 @@
   });
   delegate(reviewBody, '[data-target]', 'click', function (el) {
     state.target = el.getAttribute('data-target');
+    renderReview();
+  });
+  delegate(reviewBody, '[data-busena]', 'click', function (el) {
+    state.busena = el.getAttribute('data-busena');
+    renderReview();
+  });
+  delegate(reviewBody, '[data-bukle]', 'click', function (el) {
+    state.bukle = el.getAttribute('data-bukle');
     renderReview();
   });
   delegate(reviewBody, '#photo-add-tile', 'click', function () { $('#photo-input').click(); });
@@ -604,6 +635,8 @@
         { name: 'Assembly', $type: 'SimpleIssueCustomField', value: v.assy },
         { name: 'Part number', $type: 'SimpleIssueCustomField', value: v.part },
         { name: 'Defect reason', $type: 'SingleEnumIssueCustomField', value: { name: state.kind } },
+        { name: 'Būsena', $type: 'StateIssueCustomField', value: state.busena ? { name: state.busena } : null },
+        { name: 'Būklė', $type: 'SingleEnumIssueCustomField', value: state.bukle ? { name: state.bukle } : null },
       ],
     };
     return JSON.stringify(body, null, 2);
@@ -655,7 +688,7 @@
     state.mode = 'qr';
     state.scanErrorRaw = null;
     state.source = null; state.values = null; state.rawQr = null; state.editingField = null;
-    state.target = 'part'; state.note = ''; state.showPayload = false;
+    state.target = 'part'; state.note = ''; state.busena = null; state.bukle = null; state.showPayload = false;
     state.photos = []; state.nextPhotoNum = 1;
     state.libraryOpen = false; state.draft = '';
     setMode('qr');

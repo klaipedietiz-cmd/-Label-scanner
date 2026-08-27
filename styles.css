@@ -396,6 +396,14 @@ input, textarea {
   min-height: 38px; padding: 0 12px; border-radius: 19px; border: 1.5px dashed var(--input-border);
   background: transparent; color: var(--neutral-text); font-size: 12px; font-weight: 700; cursor: pointer;
 }
+.choice-row { padding: 12px 14px 14px; display: flex; flex-wrap: wrap; gap: 7px; }
+.choice-chip {
+  cursor: pointer; min-height: 38px; display: inline-flex; align-items: center; padding: 0 13px;
+  border-radius: 19px; font-size: 12px; font-weight: 700; background: #fff; color: var(--muted);
+  border: 1.5px solid var(--card-border);
+}
+.choice-chip.selected { background: var(--accent); color: #fff; border: 1.5px solid var(--accent); }
+
 .note-wrap { padding: 10px 14px 14px; }
 .note-wrap textarea {
   width: 100%; box-sizing: border-box; resize: none; border: 1px solid var(--input-border);
