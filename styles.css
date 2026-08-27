@@ -158,6 +158,24 @@ input, textarea {
 @keyframes pop { from { transform: scale(.86); opacity: 0 } to { transform: scale(1); opacity: 1 } }
 @keyframes rise { from { transform: translateY(24px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
 
+/* Hint text now lives above the scan frame, not below — it used to share the
+   same "bottom: 30%" spot as the read/error text below the frame, so the two
+   overlapped and rendered as an unreadable mess. Kept fully separate now. */
+.scan-hint-top {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  top: 13%;
+  text-align: center;
+  z-index: 4;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, .65);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
 .scan-status {
   position: absolute;
   left: 6%;
@@ -165,14 +183,6 @@ input, textarea {
   bottom: 30%;
   text-align: center;
   z-index: 4;
-}
-.scan-hunt {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, .65);
-  animation: pulse 1.4s ease-in-out infinite;
 }
 .scan-locked { display: flex; flex-direction: column; align-items: center; gap: 10px; animation: pop .22s ease-out; }
 .scan-locked-badge {
