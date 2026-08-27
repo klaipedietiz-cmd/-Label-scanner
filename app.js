@@ -133,22 +133,28 @@
   }
 
   // ---------------------------------------------------------------------
-  // QR payload parsing — "%job;mfg;assy;part%", exactly 4 slots or reject.
+  // QR payload parsing — "%job;mfg;assy;part%" (4 slots) or
+  // "%job;mfg;assy;part;qty%" (5 slots, quantity appended — confirmed
+  // 2026-08-27 from a real scanned label: "%010127-1-1;10-D1-61;
+  // 26-29719-01.00.00 SB_A;26-29719-01.10.02_A;5%"). Both are accepted so
+  // older 4-field labels keep working.
   //
-  // A real scanned label came back as "$BANDAY$%010127-1-1;10-D1-61;...%" —
+  // A real scanned label also came back as "$BANDAY$%010127-1-1;10-D1-61;...%" —
   // there's a prefix ("$BANDAY$", likely a test/sample-print marker) before
   // the %...% payload. So this only requires the %...% block to appear
   // somewhere in the scanned text, rather than requiring the whole string
   // to be exactly "%...%" — anything outside the percent markers (a prefix,
-  // a trailing newline the scanner added, etc.) is simply ignored. The
-  // "exactly four slots inside" guard is unchanged.
+  // a trailing newline the scanner added, etc.) is simply ignored.
   // ---------------------------------------------------------------------
   function parseQr(raw) {
     var m = /%([^%]*)%/.exec((raw || '').trim());
     if (!m) return null;
     var parts = m[1].split(';').map(function (s) { return s.trim(); });
-    if (parts.length !== 4) return null;
-    return { job: parts[0], mfg: parts[1], assy: parts[2], part: parts[3] };
+    if (parts.length !== 4 && parts.length !== 5) return null;
+    return {
+      job: parts[0], mfg: parts[1], assy: parts[2], part: parts[3],
+      qty: parts.length === 5 ? parts[4] : null,
+    };
   }
 
   // ---------------------------------------------------------------------
@@ -369,14 +375,19 @@
     state.target = 'part';
     state.note = '';
     state.summaryExtra = '';
+    // No default reason — the operator must actively pick one (or leave all
+    // deselected and just type a note instead). Previously this defaulted to
+    // the top-ordered reason, which meant there was no way to fall back to
+    // free-typed text without a reason silently staying selected underneath.
+    state.kind = null;
     state.busena = null;
     state.bukle = null;
-    state.qtyTotal = '';
+    // Auto-fill from the scan when the label includes a 5th (quantity) field;
+    // otherwise starts blank, same as manual entry.
+    state.qtyTotal = (state.values && state.values.qty) ? String(state.values.qty) : '';
     state.qtyChoice = null;
     state.qtyOther = '';
     state.showPayload = false;
-    var ordered = orderedReasons();
-    state.kind = ordered[0] || state.reasons[0] || null;
     renderReview();
     showScreen('review');
   }
@@ -568,8 +579,10 @@
     renderPhotos();
   });
   delegate(reviewBody, '[data-reason]', 'click', function (el) {
-    state.kind = el.getAttribute('data-reason');
+    var name = el.getAttribute('data-reason');
+    state.kind = (state.kind === name) ? null : name; // tap a selected chip again to clear it
     renderReasonChips();
+    $('#payload-pre').textContent = payloadText();
   });
   delegate(reviewBody, '#reason-new-chip', 'click', function () { openLibrary(); });
   delegate(reviewBody, '[data-remove-reason]', 'click', function (el) {
@@ -714,7 +727,7 @@
   $('#submit-btn').addEventListener('click', function () {
     if (state.posting || fieldsFilledCount() < 4) return;
     state.posting = true;
-    bumpUsage(state.kind);
+    if (state.kind) bumpUsage(state.kind);
     showScreen('posting');
     state.postStage = 'POST /api/issues';
     $('#post-stage').textContent = state.postStage;
