@@ -403,6 +403,15 @@ input, textarea {
   border: 1.5px solid var(--card-border);
 }
 .choice-chip.selected { background: var(--accent); color: #fff; border: 1.5px solid var(--accent); }
+.choice-chip:disabled { opacity: .4; cursor: not-allowed; }
+
+.mini-field { padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 6px; }
+.mini-field label { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.mini-field input {
+  min-height: 42px; border: 1px solid var(--input-border); border-radius: 7px; padding: 0 10px;
+  font: 500 14px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); background: #fff; outline: none;
+}
+.mini-field input:focus { border-color: var(--accent); background: var(--accent-tint-bg); }
 
 .note-wrap { padding: 10px 14px 14px; }
 .note-wrap textarea {

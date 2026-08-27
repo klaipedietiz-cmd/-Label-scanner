@@ -47,8 +47,12 @@
     target: 'part',          // 'assy' | 'part'
     kind: null,              // selected defect reason
     note: '',
+    summaryExtra: '',        // optional operator words appended to the auto-built summary
     busena: null,            // required — one of BUSENA_OPTIONS
     bukle: null,             // required — one of BUKLE_OPTIONS
+    qtyTotal: '',            // operator-typed "total on label" (QR doesn't carry quantity yet)
+    qtyChoice: null,         // null | '1' | 'all' | 'other'
+    qtyOther: '',            // custom typed quantity when qtyChoice === 'other'
 
     photos: [],              // [{ id, label, dataUrl, removable }]
     nextPhotoNum: 1,
@@ -364,8 +368,12 @@
     state.editingField = null;
     state.target = 'part';
     state.note = '';
+    state.summaryExtra = '';
     state.busena = null;
     state.bukle = null;
+    state.qtyTotal = '';
+    state.qtyChoice = null;
+    state.qtyOther = '';
     state.showPayload = false;
     var ordered = orderedReasons();
     state.kind = ordered[0] || state.reasons[0] || null;
@@ -423,7 +431,9 @@
     renderReasonChips();
     renderChoiceRow('#busena-row', BUSENA_OPTIONS, state.busena, 'busena');
     renderChoiceRow('#bukle-row', BUKLE_OPTIONS, state.bukle, 'bukle');
+    renderQty();
 
+    if ($('#summary-extra-input').value !== state.summaryExtra) $('#summary-extra-input').value = state.summaryExtra;
     $('#note-input').value = state.note;
     $('#payload-pre').textContent = payloadText();
     $('#payload-toggle-btn').textContent = state.showPayload ? 'Hide request body' : 'Show request body';
@@ -450,6 +460,34 @@
       var sel = current === opt;
       return '<button class="choice-chip' + (sel ? ' selected' : '') + '" data-' + attr + '="' + esc(opt) + '">' + esc(opt) + '</button>';
     }).join('');
+  }
+
+  // Quantity: QR doesn't carry a quantity value yet (confirmed 2026-08-27), so "total on
+  // label" is operator-typed here. Once real scanned data includes it, this same total can
+  // be auto-filled from parseQr() instead — the 1 / All / Other chooser doesn't need to change.
+  function renderQty() {
+    if ($('#qty-total-input').value !== state.qtyTotal) $('#qty-total-input').value = state.qtyTotal;
+    var total = (state.qtyTotal || '').trim();
+    if (state.qtyChoice === 'all' && !total) state.qtyChoice = null; // total cleared — selection no longer valid
+    var options = [
+      { id: '1', label: '1' },
+      { id: 'all', label: total ? ('All (' + total + ')') : 'All', disabled: !total },
+      { id: 'other', label: 'Other' },
+    ];
+    $('#qty-choice-row').innerHTML = options.map(function (o) {
+      var sel = state.qtyChoice === o.id;
+      return '<button class="choice-chip' + (sel ? ' selected' : '') + '"' + (o.disabled ? ' disabled' : '') +
+        ' data-qty-choice="' + o.id + '">' + esc(o.label) + '</button>';
+    }).join('');
+    $('#qty-other-wrap').style.display = state.qtyChoice === 'other' ? '' : 'none';
+    if ($('#qty-other-input').value !== state.qtyOther) $('#qty-other-input').value = state.qtyOther;
+  }
+
+  function resolvedQty() {
+    if (state.qtyChoice === '1') return '1';
+    if (state.qtyChoice === 'all') return (state.qtyTotal || '').trim() || null;
+    if (state.qtyChoice === 'other') return (state.qtyOther || '').trim() || null;
+    return null;
   }
 
   function renderPhotos() {
@@ -517,6 +555,12 @@
     state.bukle = el.getAttribute('data-bukle');
     renderReview();
   });
+  delegate(reviewBody, '[data-qty-choice]', 'click', function (el) {
+    if (el.disabled) return;
+    state.qtyChoice = el.getAttribute('data-qty-choice');
+    renderQty();
+    $('#payload-pre').textContent = payloadText();
+  });
   delegate(reviewBody, '#photo-add-tile', 'click', function () { $('#photo-input').click(); });
   delegate(reviewBody, '[data-remove-photo]', 'click', function (el) {
     var id = el.getAttribute('data-remove-photo');
@@ -554,6 +598,13 @@
   });
 
   $('#note-input').addEventListener('input', function (e) { state.note = e.target.value; $('#payload-pre').textContent = payloadText(); });
+  $('#summary-extra-input').addEventListener('input', function (e) { state.summaryExtra = e.target.value; $('#payload-pre').textContent = payloadText(); });
+  $('#qty-total-input').addEventListener('input', function (e) {
+    state.qtyTotal = e.target.value;
+    renderQty();
+    $('#payload-pre').textContent = payloadText();
+  });
+  $('#qty-other-input').addEventListener('input', function (e) { state.qtyOther = e.target.value; $('#payload-pre').textContent = payloadText(); });
   $('#payload-toggle-btn').addEventListener('click', function () {
     state.showPayload = !state.showPayload;
     $('#payload-toggle-btn').textContent = state.showPayload ? 'Hide request body' : 'Show request body';
@@ -620,15 +671,28 @@
     if (state.target === 'subassy') return deriveSubassembly(state.values.part) || '';
     return state.values.assy;
   }
+  // Summary: "Job;Mfg;AssemblyOrPart" plus optional operator words, per spec 2026-08-27.
+  function summaryText() {
+    var v = state.values || { job: '', mfg: '', assy: '', part: '' };
+    var core = [v.job, v.mfg, targetCode()].join(';');
+    var extra = (state.summaryExtra || '').trim();
+    return extra ? (core + ' - ' + extra) : core;
+  }
+  // Description: the selected defect reason if one was chosen; otherwise whatever the
+  // operator typed in the note. No recap line — the Job/Mfg/Assembly/Part values are
+  // already carried structurally in customFields below, so nothing is lost.
+  function descriptionText() {
+    if (state.kind) return state.kind;
+    var note = (state.note || '').trim();
+    return note || '(no description)';
+  }
   function payloadText() {
     var v = state.values || { job: '', mfg: '', assy: '', part: '' };
-    var word = TARGET_WORDS[state.target] || 'Assembly';
+    var qty = resolvedQty();
     var body = {
       project: { id: '0-12' },
-      summary: (state.kind || '') + ' — ' + targetCode() + ' — job ' + v.job,
-      description: (state.note || '(no description)') +
-        '\n\nJob ' + v.job + ' · Mfg ' + v.mfg + ' · Assembly ' + v.assy + ' · Part ' + v.part +
-        '\nDefect on: ' + word,
+      summary: summaryText(),
+      description: descriptionText(),
       customFields: [
         { name: 'Job number', $type: 'SimpleIssueCustomField', value: v.job },
         { name: 'Manufacturing code', $type: 'SimpleIssueCustomField', value: v.mfg },
@@ -637,6 +701,7 @@
         { name: 'Defect reason', $type: 'SingleEnumIssueCustomField', value: { name: state.kind } },
         { name: 'Būsena', $type: 'StateIssueCustomField', value: state.busena ? { name: state.busena } : null },
         { name: 'Būklė', $type: 'SingleEnumIssueCustomField', value: state.bukle ? { name: state.bukle } : null },
+        { name: 'Brokas (vnt/kg/vmz.vnt)', $type: 'SimpleIssueCustomField', value: qty },
       ],
     };
     return JSON.stringify(body, null, 2);
@@ -688,7 +753,10 @@
     state.mode = 'qr';
     state.scanErrorRaw = null;
     state.source = null; state.values = null; state.rawQr = null; state.editingField = null;
-    state.target = 'part'; state.note = ''; state.busena = null; state.bukle = null; state.showPayload = false;
+    state.target = 'part'; state.note = ''; state.summaryExtra = '';
+    state.busena = null; state.bukle = null;
+    state.qtyTotal = ''; state.qtyChoice = null; state.qtyOther = '';
+    state.showPayload = false;
     state.photos = []; state.nextPhotoNum = 1;
     state.libraryOpen = false; state.draft = '';
     setMode('qr');

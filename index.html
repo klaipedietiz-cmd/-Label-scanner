@@ -120,6 +120,14 @@
       </div>
 
       <div class="card">
+        <div class="card-head"><span class="card-title">Summary</span></div>
+        <div class="mini-field">
+          <label for="summary-extra-input">Additional words (optional) — appended to Job;Mfg;Assembly-or-Part</label>
+          <input id="summary-extra-input" type="text" placeholder="e.g. bandymas panaudoti skanavimą">
+        </div>
+      </div>
+
+      <div class="card">
         <div class="card-head"><span class="card-title">Būsena</span></div>
         <div id="busena-row" class="choice-row"></div>
       </div>
@@ -127,6 +135,19 @@
       <div class="card">
         <div class="card-head"><span class="card-title">Būklė</span></div>
         <div id="bukle-row" class="choice-row"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><span class="card-title">Quantity</span></div>
+        <div class="mini-field">
+          <label for="qty-total-input">Total on label (optional)</label>
+          <input id="qty-total-input" type="text" inputmode="numeric" placeholder="e.g. 12">
+        </div>
+        <div id="qty-choice-row" class="choice-row"></div>
+        <div id="qty-other-wrap" class="mini-field" style="display:none">
+          <label for="qty-other-input">Quantity</label>
+          <input id="qty-other-input" type="text" inputmode="numeric" placeholder="Enter quantity">
+        </div>
       </div>
 
       <div class="card">
