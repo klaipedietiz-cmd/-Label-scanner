@@ -133,11 +133,11 @@
   }
 
   // ---------------------------------------------------------------------
-  // QR payload parsing — "%job;mfg;assy;part%" (4 slots) or
-  // "%job;mfg;assy;part;qty%" (5 slots, quantity appended — confirmed
-  // 2026-08-27 from a real scanned label: "%010127-1-1;10-D1-61;
-  // 26-29719-01.00.00 SB_A;26-29719-01.10.02_A;5%"). Both are accepted so
-  // older 4-field labels keep working.
+  // QR payload parsing — "%job;mfg;assy;part;qty%", exactly 5 slots
+  // required (quantity mandatory, per 2026-08-27 decision). Confirmed
+  // real-label format: "%010127-1-1;10-D1-61;26-29719-01.00.00 SB_A;
+  // 26-29719-01.10.02_A;5%". A 4-slot label (no quantity) is now treated
+  // as malformed, same as any other bad read.
   //
   // A real scanned label also came back as "$BANDAY$%010127-1-1;10-D1-61;...%" —
   // there's a prefix ("$BANDAY$", likely a test/sample-print marker) before
@@ -150,11 +150,8 @@
     var m = /%([^%]*)%/.exec((raw || '').trim());
     if (!m) return null;
     var parts = m[1].split(';').map(function (s) { return s.trim(); });
-    if (parts.length !== 4 && parts.length !== 5) return null;
-    return {
-      job: parts[0], mfg: parts[1], assy: parts[2], part: parts[3],
-      qty: parts.length === 5 ? parts[4] : null,
-    };
+    if (parts.length !== 5) return null;
+    return { job: parts[0], mfg: parts[1], assy: parts[2], part: parts[3], qty: parts[4] };
   }
 
   // ---------------------------------------------------------------------
