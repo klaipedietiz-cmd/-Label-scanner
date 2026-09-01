@@ -168,24 +168,36 @@
   //
   // Shapes below are taken directly from real Novameta labels seen in this
   // build (not invented): Job "010481-1-1" / "010559-16-1", Manufacturing
-  // code "03-D1-1" / "02-D3-106", Assembly "25-33724-00.00.00 SB_A" /
-  // "26-10283-00.VTTD1 SB_A" (the middle segment isn't always numeric),
-  // Part "25-33724-03.28.05_A" (numeric-prefixed labels) OR "VTTD1-10.05_A"
-  // (letter-prefixed labels — a second, different part-numbering scheme
-  // confirmed 2026-09-01 on a real label, hence PART_RE and PART_ALT_RE
-  // below instead of one pattern), Quantity "4vnt." / "1vnt." (a bare
-  // "<n>vnt." — a second, letter-prefixed "G1vnt."-style code also appears
-  // on labels and is NOT the quantity, per the operator, so it's
-  // deliberately excluded).
+  // code "03-D1-1" / "02-D3-106" / "[31-D1-7]", Assembly "25-33724-00.00.00
+  // SB_A" / "26-10283-00.VTTD1 SB_A" (the middle segment isn't always
+  // numeric), Quantity "4vnt." / "1vnt." (a bare "<n>vnt." — a second,
+  // letter-prefixed "G1vnt."-style code also appears on labels and is NOT
+  // the quantity, per the operator, so it's deliberately excluded).
+  //
+  // Confirmed 2026-09-01 against 3 more real labels: the part code's shape
+  // varies more than just "numeric-prefixed" vs "letter-prefixed" — one used
+  // square brackets ("UWP0-00.01[004]_B"), another had two dotted segments
+  // after a letter+digit prefix ("XXX22-0002.00.02_A"). Rather than keep
+  // adding one narrow pattern per shape seen so far, PART_RE below is now a
+  // single general rule: "some code made of letters/digits/dots/hyphens/
+  // brackets, then an underscore-or-space, then exactly one trailing letter"
+  // — which is the one thing true of every part code seen so far — while
+  // still excluding the "... SB_A" assembly suffix so the two don't collide.
+  // Also confirmed the assembly reference sometimes has NO "SB_A" suffix at
+  // all (e.g. "26-25905-05.00.00") — that shape is too generic to safely
+  // match without risking false positives elsewhere, so it's left blank for
+  // the operator to fill in rather than guessed.
   // ---------------------------------------------------------------------
   var JOB_CANDIDATE_RE = /\b[0-9A-Za-z]{5,7}-[0-9A-Za-z]{1,3}-[0-9A-Za-z]{1,3}\b/g;
-  var MFG_RE = /\b\d{2}-[A-Za-z]\d-\d{1,3}\b/g;
+  var MFG_RE = /\b\d{1,2}-[A-Za-z]\d-\d{1,3}\b/g;
   var ASSY_RE = /\b\d{2}-\d{4,5}-[0-9A-Za-z.,]{2,20}\s*SB[_ .]?A\b/gi;
-  var PART_RE = /\b\d{2}-\d{4,5}-[0-9A-Za-z.,]{2,20}[\s_]+(?!SB[_ ]?A\b)[A-Za-z]\b/g;
-  // Letter-prefixed variant, e.g. "VTTD1-10.05_A": short letter+digit code,
-  // one hyphen, then a dotted number, then "_<letter>".
-  var PART_ALT_RE = /\b[A-Za-z]{2,6}\d{0,3}-\d{1,3}\.\d{1,3}[\s_]+(?!SB[_ ]?A\b)[A-Za-z]\b/g;
-  var QTY_RE = /(?:^|[^A-Za-z0-9])(\d{1,4})\s*[a-z]{0,3}nt\.?/i;
+  var PART_RE = /\b[0-9A-Za-z][0-9A-Za-z.\-\[\]]{3,30}[ _]+(?!SB[_ ]?A\b)[A-Za-z]\b/g;
+  // Quantity: a bare "<n>vnt."-style token. Deliberately restricted to
+  // same-line whitespace only (no \s, which would cross a newline) and at
+  // most 1 letter before "nt" — an earlier, looser version of this regex
+  // once matched "00" from an unrelated code several lines away from a
+  // stray "...vnt" token by crossing a line break; this doesn't.
+  var QTY_RE = /(?:^|[^A-Za-z0-9])(\d{1,4})[ \t]*[a-z]?nt\.?/i;
   // Job numbers are digits only, with the letter F sometimes appearing (per the
   // operator) — no other letters. These are the common OCR digit look-alikes;
   // anything else left over after this substitution means "not a job number".
@@ -225,7 +237,7 @@
     var assyMatch = t.match(ASSY_RE);
     if (assyMatch) guesses.assy = normalizeCodeToken(assyMatch[0]);
 
-    var partMatch = t.match(PART_RE) || t.match(PART_ALT_RE);
+    var partMatch = t.match(PART_RE);
     if (partMatch) guesses.part = normalizeCodeToken(partMatch[0]);
 
     var qtyMatch = QTY_RE.exec(t);

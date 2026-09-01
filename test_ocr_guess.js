@@ -23,7 +23,6 @@ eval(extractVar('JOB_CANDIDATE_RE'));
 eval(extractVar('MFG_RE'));
 eval(extractVar('ASSY_RE'));
 eval(extractVar('PART_RE'));
-eval(extractVar('PART_ALT_RE'));
 eval(extractVar('QTY_RE'));
 eval(extractVar('JOB_LOOKALIKE'));
 eval(extract('correctJobCandidate'));
@@ -91,6 +90,23 @@ var PHOTO4_TEXT = [
   'Givnt.',
 ].join('\n');
 
+// Three more real labels, sent 2026-09-01, that surfaced a third and fourth
+// part-numbering shape (square brackets; two dotted segments after a
+// letter+digit prefix) and a real regex bug: an earlier, looser QTY_RE
+// crossed a line break and misread an unrelated "00" as quantity. All three
+// texts below are real Tesseract output (PSM 3) from tightly-cropped photos
+// of the physical labels.
+var PHOTO5_TEXT = [ // "UWP0-00.01[004]_B" label
+  'UWP0-00.01[004]_B', '', 'Dugnas', '', '1298.7x526.7', '',
+  '1vnt.', '0.8PL201', '', '010680-2-1', '26-25905-00.00.00 SB_A', 'Gtvnt.', '', '000',
+].join('\n');
+var PHOTO6_TEXT = [ // "26-25905-05.32.01_A" label — mfg code was dropped entirely by OCR here
+  '26-25905-05.32.01_A', '', '010680-2-4', '26-25905-05.00.00', 'Givnt', '', 'OF |', 'Ly',
+].join('\n');
+var PHOTO7_TEXT = [ // "XXX22-0002.00.02_A" label
+  'XXX22-0002.00.02_A', '', 'Tarpine', '', '010700-12-1', '12vnt 26-47390-00.XXX22-0002', '2mm', '', 'G6vnt',
+].join('\n');
+
 var cases = [
   {
     name: 'Photo 1 (VTTD1-10.05_A label)',
@@ -126,6 +142,29 @@ var cases = [
     // With the crop applied, all 5 fields are correctly recovered — including
     // quantity, which no other photo in this test file has managed to recover.
     expect: { job: '010559-16-1', mfg: '02-D3-106', assy: '26-10283-00.VTTD1 SB_A', part: 'VTTD1-10.05_A', qty: '1' },
+  },
+  {
+    name: 'Photo 5 (UWP0-00.01[004]_B label — bracketed part code)',
+    text: PHOTO5_TEXT,
+    // mfg ("F_SL"/"02-D3-104") was dropped by OCR itself on this capture —
+    // an OCR-completeness gap, not a regex gap, so it's expected to stay blank.
+    expect: { job: '010680-2-1', assy: '26-25905-00.00.00 SB_A', part: 'UWP0-00.01[004]_B', qty: '1', mfg: undefined },
+  },
+  {
+    name: 'Photo 6 (26-25905-05.32.01_A label — no SB_A suffix on the assembly ref, and the old QTY_RE bug)',
+    text: PHOTO6_TEXT,
+    // This is the exact text that made the OLD QTY_RE wrongly guess qty:"00"
+    // (by crossing a newline to reach "Givnt" several lines down). It must
+    // now stay undefined — an honest blank, not a wrong guess. assy/mfg also
+    // stay blank: the assembly ref has no SB_A suffix (deliberately not
+    // guessed, see PART_RE/ASSY_RE comment in app.js) and OCR dropped mfg
+    // entirely on this capture.
+    expect: { job: '010680-2-4', part: '26-25905-05.32.01_A', qty: undefined, mfg: undefined, assy: undefined },
+  },
+  {
+    name: 'Photo 7 (XXX22-0002.00.02_A label — letter+digit prefix with two dotted segments)',
+    text: PHOTO7_TEXT,
+    expect: { job: '010700-12-1', part: 'XXX22-0002.00.02_A', qty: '12', mfg: undefined, assy: undefined },
   },
 ];
 
