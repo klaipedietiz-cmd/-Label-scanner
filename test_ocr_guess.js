@@ -72,6 +72,25 @@ var PHOTO3_TEXT = [
   'rea',
 ].join('\n');
 
+// Real Tesseract output captured 2026-09-01 from a real, full-scene phone photo
+// of this same physical label (label small within a much larger background —
+// a wall, pipes, a company logo) AFTER cropping it down to just the label
+// region, simulating the app's new capture-crop fix. The SAME full, uncropped
+// photo produced completely empty OCR output with internal segmentation
+// errors — this is the concrete before/after proof that cropping to the
+// on-screen guide box (not just PSM/regex tuning) was the real fix needed.
+var PHOTO4_TEXT = [
+  'VTTD1-10.05 A',
+  'Lentyna 02-D3-106',
+  '487.8x387.8',
+  '',
+  '010559-16-1',
+  '',
+  '1vnt. 26-10283-00.VTTD1 SB_A',
+  '',
+  'Givnt.',
+].join('\n');
+
 var cases = [
   {
     name: 'Photo 1 (VTTD1-10.05_A label)',
@@ -100,6 +119,13 @@ var cases = [
     // Tesseract dropped from its output entirely on this capture, so qty
     // stays an honest blank rather than a wrong guess.
     expect: { job: '010559-16-1', mfg: '02-D3-106', assy: '26-10283-00.VTTD1 SB_A', part: 'VTTD1-10.05_A', qty: undefined },
+  },
+  {
+    name: 'Photo 4 (same VTTD1 label, real full-scene phone photo, CROPPED to the label)',
+    text: PHOTO4_TEXT,
+    // With the crop applied, all 5 fields are correctly recovered — including
+    // quantity, which no other photo in this test file has managed to recover.
+    expect: { job: '010559-16-1', mfg: '02-D3-106', assy: '26-10283-00.VTTD1 SB_A', part: 'VTTD1-10.05_A', qty: '1' },
   },
 ];
 

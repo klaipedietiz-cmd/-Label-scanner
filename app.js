@@ -366,6 +366,48 @@
     return canvas.toDataURL('image/jpeg', 0.85);
   }
 
+  // ---------------------------------------------------------------------
+  // OCR crop — confirmed 2026-09-01 as the actual root cause of OCR reading
+  // nothing on a real photo: the shutter used to hand Tesseract the WHOLE
+  // camera frame, but on an un-zoomed real photo the label only fills a
+  // small part of that frame (lots of background wall/floor around it), and
+  // Tesseract's page segmentation fails outright on that — cropping the
+  // exact same frame down to just the label made every field readable.
+  // So OCR now only ever runs on the region inside the on-screen "frame the
+  // whole label" guide box (.scan-frame-wrap: left/right 8%, top 22%,
+  // height 34% of the video's displayed area) — same box the operator is
+  // already told to line the label up with — mapped from displayed CSS
+  // pixels into the video's native pixel coordinates (accounting for
+  // object-fit: cover, which crops/scales the native frame to fill the
+  // screen).
+  // ---------------------------------------------------------------------
+  function computeOcrCropRect() {
+    var rect = video.getBoundingClientRect();
+    var Wc = rect.width, Hc = rect.height;
+    var Wv = video.videoWidth, Hv = video.videoHeight;
+    if (!Wc || !Hc || !Wv || !Hv) return null;
+    var scale = Math.max(Wc / Wv, Hc / Hv); // object-fit: cover
+    var offsetX = (Wv * scale - Wc) / 2;
+    var offsetY = (Hv * scale - Hc) / 2;
+    var gx = 0.08 * Wc, gy = 0.22 * Hc, gw = 0.84 * Wc, gh = 0.34 * Hc; // matches .scan-frame-wrap in styles.css
+    var x0 = (gx + offsetX) / scale, y0 = (gy + offsetY) / scale;
+    var x1 = (gx + gw + offsetX) / scale, y1 = (gy + gh + offsetY) / scale;
+    var x = Math.max(0, Math.round(x0)), y = Math.max(0, Math.round(y0));
+    var w = Math.min(Wv - x, Math.round(x1 - x0)), h = Math.min(Hv - y, Math.round(y1 - y0));
+    if (w <= 0 || h <= 0) return null;
+    return { x: x, y: y, w: w, h: h };
+  }
+
+  function captureOcrCropDataUrl() {
+    if (!video.videoWidth) return null;
+    var r = computeOcrCropRect();
+    if (!r) return captureFrameDataUrl(); // geometry unavailable — fall back to the full frame
+    canvas.width = r.w;
+    canvas.height = r.h;
+    ctx.drawImage(video, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+    return canvas.toDataURL('image/jpeg', 0.92);
+  }
+
   function handleDecoded(raw) {
     var parsed = parseQr(raw);
     if (!parsed) {
@@ -429,7 +471,7 @@
   $('#shutter-btn').addEventListener('click', function () {
     if (state.mode === 'ocr') {
       if (state.ocrBusy) return;
-      var frame = captureFrameDataUrl();
+      var frame = captureFrameDataUrl(); // full frame — kept as the attached photo, unrelated to OCR
       if (!frame) { state.photos = []; openManual(true, {}); return; }
 
       downscaleDataUrl(frame, function (small) {
@@ -437,11 +479,15 @@
         state.nextPhotoNum = 1;
       });
 
+      // OCR itself runs on a SEPARATE, cropped capture (just the on-screen guide
+      // box), not the full frame above — see captureOcrCropDataUrl()'s comment.
+      var ocrImage = captureOcrCropDataUrl() || frame;
+
       state.ocrBusy = true;
       $('#shutter-btn').disabled = true;
       $('#scan-hunt').textContent = 'Reading label…';
       getOcrWorker()
-        .then(function (worker) { return worker.recognize(frame); })
+        .then(function (worker) { return worker.recognize(ocrImage); })
         .then(function (result) {
           var guesses = guessFieldsFromOcrText((result && result.data && result.data.text) || '');
           state.ocrBusy = false;
