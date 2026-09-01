@@ -17,7 +17,11 @@ const { chromium } = require('playwright');
     permissions: ['camera'],
   });
   const page = await context.newPage();
-  page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()); });
+  page.on('console', (msg) => {
+    // Tesseract logs its own internal diagnostics (e.g. "Estimating resolution
+    // as ...") through console.error — that's normal engine chatter, not a bug.
+    if (msg.type() === 'error' && !/Estimating resolution/.test(msg.text())) errors.push(msg.text());
+  });
   page.on('pageerror', (err) => errors.push('pageerror: ' + err.message));
 
   await page.goto('http://localhost:8080/index.html');
@@ -44,6 +48,16 @@ const { chromium } = require('playwright');
     vals[id] = await page.inputValue('#' + id);
   }
   console.log('field values after OCR (synthetic feed — expect all blank, no crash):', vals);
+
+  console.log('--- Checking "What OCR saw" debug panel ---');
+  console.log('debug panel visible (expect true):', await page.isVisible('#ocr-debug'));
+  console.log('debug body collapsed by default (expect false/hidden):', await page.isVisible('#ocr-debug-body'));
+  await page.click('#ocr-debug-toggle');
+  console.log('debug body visible after tapping toggle (expect true):', await page.isVisible('#ocr-debug-body'));
+  const debugImgSrc = await page.getAttribute('#ocr-debug-image', 'src');
+  console.log('debug image src is a data URL (expect true):', !!debugImgSrc && debugImgSrc.startsWith('data:'));
+  const debugText = (await page.textContent('#ocr-debug-text')).trim();
+  console.log('debug text (synthetic feed, expect empty-result placeholder):', JSON.stringify(debugText));
 
   console.log('\n=== CONSOLE/PAGE ERRORS ===');
   console.log(errors.length ? errors : 'none');

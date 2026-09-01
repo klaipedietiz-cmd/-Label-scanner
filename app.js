@@ -73,6 +73,8 @@
     cameraError: null,
     manualInfoBanner: false,  // show the "check these values" note on the manual screen
     ocrBusy: false,           // true while Tesseract is recognizing a captured photo
+    ocrDebug: null,           // { image, text } from the last OCR attempt — lets the
+                              // operator see exactly what the engine was given and read
   };
 
   // ---------------------------------------------------------------------
@@ -484,7 +486,7 @@
     if (state.mode === 'ocr') {
       if (state.ocrBusy) return;
       var frame = captureFrameDataUrl(); // full frame — kept as the attached photo, unrelated to OCR
-      if (!frame) { state.photos = []; openManual(true, {}); return; }
+      if (!frame) { state.photos = []; state.ocrDebug = null; openManual(true, {}); return; }
 
       downscaleDataUrl(frame, function (small) {
         state.photos = [{ id: 'label', label: 'Label', dataUrl: small, removable: false }];
@@ -501,14 +503,19 @@
       getOcrWorker()
         .then(function (worker) { return worker.recognize(ocrImage); })
         .then(function (result) {
-          var guesses = guessFieldsFromOcrText((result && result.data && result.data.text) || '');
+          var rawText = (result && result.data && result.data.text) || '';
+          var guesses = guessFieldsFromOcrText(rawText);
+          state.ocrDebug = { image: ocrImage, text: rawText };
           state.ocrBusy = false;
           $('#shutter-btn').disabled = false;
           openManual(true, guesses);
         })
-        .catch(function () {
+        .catch(function (err) {
           // OCR failed to load or run (e.g. first-time fetch of the engine files
           // failed) — fall back to a plain blank manual entry rather than getting stuck.
+          // Still record what was attempted so "What OCR saw" can show the real error
+          // instead of silently leaving the operator with an unexplained blank form.
+          state.ocrDebug = { image: ocrImage, text: '(OCR did not run: ' + ((err && err.message) || err || 'unknown error') + ')' };
           state.ocrBusy = false;
           $('#shutter-btn').disabled = false;
           openManual(true, {});
@@ -540,6 +547,8 @@
       $('#manual-info-banner').textContent = hasAnyGuess
         ? 'Read from the photo — check each value below before continuing.'
         : "Couldn't confidently read the label from that photo — enter the values below.";
+    } else {
+      state.ocrDebug = null; // plain manual entry — nothing to show
     }
     $('#manual-info-banner').style.display = fromOcr ? '' : 'none';
     $('#m-job').value = guesses.job || '';
@@ -547,9 +556,29 @@
     $('#m-assy').value = guesses.assy || '';
     $('#m-part').value = guesses.part || '';
     $('#m-qty').value = guesses.qty || '';
+    renderOcrDebug();
     checkManualComplete();
     showScreen('manual');
   }
+  // "What OCR saw" — shows the operator exactly what was sent to the OCR engine
+  // (the cropped image) and exactly what it read back (the raw text), so a bad
+  // read can be diagnosed on the phone itself instead of by sending photos back
+  // and forth. Collapsed by default; only shown after an actual OCR attempt.
+  function renderOcrDebug() {
+    var panel = $('#ocr-debug');
+    if (!state.ocrDebug) { panel.style.display = 'none'; return; }
+    panel.style.display = '';
+    $('#ocr-debug-body').style.display = 'none';
+    $('#ocr-debug-toggle').textContent = 'What OCR saw ▾';
+    $('#ocr-debug-image').src = state.ocrDebug.image || '';
+    $('#ocr-debug-text').textContent = (state.ocrDebug.text || '').trim() || '(empty — the OCR engine found no text at all in that image)';
+  }
+  $('#ocr-debug-toggle').addEventListener('click', function () {
+    var body = $('#ocr-debug-body');
+    var open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : '';
+    $('#ocr-debug-toggle').textContent = 'What OCR saw ' + (open ? '▾' : '▴');
+  });
   function checkManualComplete() {
     var ok = ['#m-job', '#m-mfg', '#m-assy', '#m-part', '#m-qty'].every(function (sel) { return $(sel).value.trim().length > 0; });
     $('#manual-continue-btn').disabled = !ok;

@@ -72,6 +72,15 @@
       <div id="manual-info-banner" class="info-banner" style="display:none">
         OCR reading isn't available in this build yet — enter the four values printed on the label below.
       </div>
+      <div id="ocr-debug" class="ocr-debug" style="display:none">
+        <button type="button" id="ocr-debug-toggle" class="ocr-debug-toggle">What OCR saw &#9662;</button>
+        <div id="ocr-debug-body" class="ocr-debug-body" style="display:none">
+          <div class="ocr-debug-label">Image sent to OCR (cropped to the on-screen guide box)</div>
+          <img id="ocr-debug-image" class="ocr-debug-image" alt="Cropped label region sent to OCR">
+          <div class="ocr-debug-label">Raw text the OCR engine read from it</div>
+          <pre id="ocr-debug-text" class="ocr-debug-text"></pre>
+        </div>
+      </div>
       <div class="field-group">
         <label for="m-job">Job number</label>
         <input id="m-job" type="text" autocomplete="off" placeholder="e.g. 010127-1-1">
