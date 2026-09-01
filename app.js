@@ -505,20 +505,29 @@
         .then(function (result) {
           var rawText = (result && result.data && result.data.text) || '';
           var guesses = guessFieldsFromOcrText(rawText);
-          state.ocrDebug = { image: ocrImage, text: rawText };
-          state.ocrBusy = false;
-          $('#shutter-btn').disabled = false;
-          openManual(true, guesses);
+          // Downscale ONLY the debug-preview copy — a real camera's native crop can be
+          // several MB as a data URL, which some phones' browsers appear to choke on
+          // when set as an <img src> (confirmed 2026-09-02: everything after that image
+          // in the panel silently failed to render on a real device). OCR itself still
+          // runs on the full-resolution ocrImage above, unaffected by this.
+          downscaleDataUrl(ocrImage, function (smallImg) {
+            state.ocrDebug = { image: smallImg, text: rawText };
+            state.ocrBusy = false;
+            $('#shutter-btn').disabled = false;
+            openManual(true, guesses);
+          });
         })
         .catch(function (err) {
           // OCR failed to load or run (e.g. first-time fetch of the engine files
           // failed) — fall back to a plain blank manual entry rather than getting stuck.
           // Still record what was attempted so "What OCR saw" can show the real error
           // instead of silently leaving the operator with an unexplained blank form.
-          state.ocrDebug = { image: ocrImage, text: '(OCR did not run: ' + ((err && err.message) || err || 'unknown error') + ')' };
-          state.ocrBusy = false;
-          $('#shutter-btn').disabled = false;
-          openManual(true, {});
+          downscaleDataUrl(ocrImage, function (smallImg) {
+            state.ocrDebug = { image: smallImg, text: '(OCR did not run: ' + ((err && err.message) || err || 'unknown error') + ')' };
+            state.ocrBusy = false;
+            $('#shutter-btn').disabled = false;
+            openManual(true, {});
+          });
         });
     } else {
       // Force an immediate decode attempt from the current frame.
@@ -570,8 +579,23 @@
     panel.style.display = '';
     $('#ocr-debug-body').style.display = 'none';
     $('#ocr-debug-toggle').textContent = 'What OCR saw ▾';
-    $('#ocr-debug-image').src = state.ocrDebug.image || '';
-    $('#ocr-debug-text').textContent = (state.ocrDebug.text || '').trim() || '(empty — the OCR engine found no text at all in that image)';
+
+    var img = state.ocrDebug.image || '';
+    var text = state.ocrDebug.text || '';
+    // A plain text line, set first and independent of the <img>/<pre> below —
+    // confirmed 2026-09-02 on a real phone that the image and text below this
+    // point sometimes don't render at all (likely a large data URL choking
+    // that browser). This line uses only textContent on a plain div, so it
+    // stays visible even if the image/pre rendering fails outright, and it's
+    // useful on its own: sizes + a preview of what was actually recognized.
+    var preview = text ? '"' + text.trim().slice(0, 80).replace(/\n/g, ' / ') + (text.trim().length > 80 ? '…' : '') + '"' : '(no text at all)';
+    $('#ocr-debug-diag').textContent = 'image: ' + img.length + ' chars · text: ' + text.length + ' chars · ' + preview;
+
+    try { $('#ocr-debug-image').src = img; }
+    catch (e) { $('#ocr-debug-diag').textContent += ' [image render error: ' + e.message + ']'; }
+
+    try { $('#ocr-debug-text').textContent = text.trim() || '(empty — the OCR engine found no text at all in that image)'; }
+    catch (e) { $('#ocr-debug-diag').textContent += ' [text render error: ' + e.message + ']'; }
   }
   $('#ocr-debug-toggle').addEventListener('click', function () {
     var body = $('#ocr-debug-body');
