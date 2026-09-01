@@ -23,6 +23,7 @@ eval(extractVar('JOB_CANDIDATE_RE'));
 eval(extractVar('MFG_RE'));
 eval(extractVar('ASSY_RE'));
 eval(extractVar('PART_RE'));
+eval(extractVar('PART_ALT_RE'));
 eval(extractVar('QTY_RE'));
 eval(extractVar('JOB_LOOKALIKE'));
 eval(extract('correctJobCandidate'));
@@ -49,15 +50,37 @@ var PHOTO2_TEXT = [
   '0.8PL201 Givnt',
 ].join('\n');
 
+// Real Tesseract output captured 2026-09-01 from a THIRD, sharper photo of the
+// same VTTD1-10.05_A label — this time with tessedit_pageseg_mode explicitly
+// forced to '3' (automatic page segmentation), which read noticeably more of
+// the label than whatever Tesseract falls back to when that isn't set
+// explicitly (same photo, unset PSM, missed almost everything — see
+// test_ocr_psm.js in /tmp during this investigation). This is also the photo
+// that revealed a second real part-numbering scheme ("VTTD1-10.05_A", letter-
+// prefixed) distinct from the numeric-prefixed one on photo 2, hence
+// PART_ALT_RE.
+var PHOTO3_TEXT = [
+  'VTTD1-10.05_A F_SL',
+  'Lentyna 02-D3-106 z',
+  '~4 487.8x387.8',
+  '',
+  '010559-16-1',
+  '',
+  'ho 26-10283-00.VTTD1 SB_A |',
+  '0.8PL201 Givnt.',
+  '',
+  'rea',
+].join('\n');
+
 var cases = [
   {
     name: 'Photo 1 (VTTD1-10.05_A label)',
     text: PHOTO1_TEXT,
-    // Ground truth from the real physical label: job number "010559-16-1"
-    // came through clean here (this was NOT the field that was garbled on
-    // this particular capture — part/quantity were). Confirms the job regex
-    // correctly finds it without needing any letter-correction.
-    expect: { mfg: '02-D3-106', assy: '26-10283-00.VTTD1 SB_A', job: '010559-16-1', part: undefined, qty: undefined },
+    // Ground truth from the real physical label: job "010559-16-1" and part
+    // "VTTD1-10.05_A" both came through clean here (quantity was the field
+    // garbled on this particular weak capture — see photo 3 below for a
+    // sharper capture of the very same physical label).
+    expect: { mfg: '02-D3-106', assy: '26-10283-00.VTTD1 SB_A', job: '010559-16-1', part: 'VTTD1-10.05_A', qty: undefined },
   },
   {
     name: 'Photo 2 (25-33724 label)',
@@ -67,6 +90,16 @@ var cases = [
     // is EXPECTED to still be wrong; the point of this test is that it stays
     // a plausible-shaped guess for the operator to fix, not that it's correct.
     expect: { job: '070481-1-4', assy: '25-33724-00.00.00 SB_A', part: '25-33724-03.28.05_A', qty: '4', mfg: undefined },
+  },
+  {
+    name: 'Photo 3 (VTTD1-10.05_A label, PSM=3, sharper capture)',
+    text: PHOTO3_TEXT,
+    // Ground truth: job "010559-16-1", mfg "02-D3-106", assembly
+    // "26-10283-00.VTTD1 SB_A", part "VTTD1-10.05_A" (the letter-prefixed
+    // scheme PART_ALT_RE exists for), quantity "1vnt." — the one field
+    // Tesseract dropped from its output entirely on this capture, so qty
+    // stays an honest blank rather than a wrong guess.
+    expect: { job: '010559-16-1', mfg: '02-D3-106', assy: '26-10283-00.VTTD1 SB_A', part: 'VTTD1-10.05_A', qty: undefined },
   },
 ];
 

@@ -170,14 +170,21 @@
   // build (not invented): Job "010481-1-1" / "010559-16-1", Manufacturing
   // code "03-D1-1" / "02-D3-106", Assembly "25-33724-00.00.00 SB_A" /
   // "26-10283-00.VTTD1 SB_A" (the middle segment isn't always numeric),
-  // Part "25-33724-03.28.05_A", Quantity "4vnt." (a bare "<n>vnt." — a
-  // second, letter-prefixed "G1vnt."-style code also appears on labels and
-  // is NOT the quantity, per the operator, so it's deliberately excluded).
+  // Part "25-33724-03.28.05_A" (numeric-prefixed labels) OR "VTTD1-10.05_A"
+  // (letter-prefixed labels — a second, different part-numbering scheme
+  // confirmed 2026-09-01 on a real label, hence PART_RE and PART_ALT_RE
+  // below instead of one pattern), Quantity "4vnt." / "1vnt." (a bare
+  // "<n>vnt." — a second, letter-prefixed "G1vnt."-style code also appears
+  // on labels and is NOT the quantity, per the operator, so it's
+  // deliberately excluded).
   // ---------------------------------------------------------------------
   var JOB_CANDIDATE_RE = /\b[0-9A-Za-z]{5,7}-[0-9A-Za-z]{1,3}-[0-9A-Za-z]{1,3}\b/g;
   var MFG_RE = /\b\d{2}-[A-Za-z]\d-\d{1,3}\b/g;
   var ASSY_RE = /\b\d{2}-\d{4,5}-[0-9A-Za-z.,]{2,20}\s*SB[_ .]?A\b/gi;
   var PART_RE = /\b\d{2}-\d{4,5}-[0-9A-Za-z.,]{2,20}[\s_]+(?!SB[_ ]?A\b)[A-Za-z]\b/g;
+  // Letter-prefixed variant, e.g. "VTTD1-10.05_A": short letter+digit code,
+  // one hyphen, then a dotted number, then "_<letter>".
+  var PART_ALT_RE = /\b[A-Za-z]{2,6}\d{0,3}-\d{1,3}\.\d{1,3}[\s_]+(?!SB[_ ]?A\b)[A-Za-z]\b/g;
   var QTY_RE = /(?:^|[^A-Za-z0-9])(\d{1,4})\s*[a-z]{0,3}nt\.?/i;
   // Job numbers are digits only, with the letter F sometimes appearing (per the
   // operator) — no other letters. These are the common OCR digit look-alikes;
@@ -218,7 +225,7 @@
     var assyMatch = t.match(ASSY_RE);
     if (assyMatch) guesses.assy = normalizeCodeToken(assyMatch[0]);
 
-    var partMatch = t.match(PART_RE);
+    var partMatch = t.match(PART_RE) || t.match(PART_ALT_RE);
     if (partMatch) guesses.part = normalizeCodeToken(partMatch[0]);
 
     var qtyMatch = QTY_RE.exec(t);
@@ -257,6 +264,12 @@
           gzip: true,
           logger: function () {},
         });
+      }).then(function (worker) {
+        // Confirmed 2026-09-01 against a real label photo: explicitly forcing
+        // "automatic page segmentation" (PSM 3) reads noticeably more fields
+        // correctly than whatever Tesseract falls back to when this isn't set
+        // (that default missed several fields entirely on the same photo).
+        return worker.setParameters({ tessedit_pageseg_mode: '3' }).then(function () { return worker; });
       }).catch(function (err) {
         ocrWorkerPromise = null; // allow retrying on the next shutter press
         throw err;
