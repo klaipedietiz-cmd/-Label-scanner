@@ -15,7 +15,8 @@
   // ---------------------------------------------------------------------
   // Constants
   // ---------------------------------------------------------------------
-  var LABELS = { job: 'Job number', mfg: 'Manuf. code', assy: 'Assembly', part: 'Part no.' };
+  var LABELS = { job: 'Job number', mfg: 'Manuf. code', assy: 'Assembly', part: 'Part no.', qty: 'Quantity' };
+  var VALUE_FIELDS = ['job', 'mfg', 'assy', 'part', 'qty']; // quantity mandatory alongside the rest, 2026-08-27
   var DEFAULT_REASONS = ['Weld defect', 'Dimension out of tol.', 'Surface finish', 'Material fault',
     'Wrong part', 'Transport damage', 'Missing feature', 'Paint / coating'];
   // "Būsena" (State) and "Būklė" — real YouTrack QMS project custom fields, confirmed
@@ -70,7 +71,8 @@
 
     cameraReady: false,
     cameraError: null,
-    manualInfoBanner: false,  // show the "OCR isn't available" note on the manual screen
+    manualInfoBanner: false,  // show the "check these values" note on the manual screen
+    ocrBusy: false,           // true while Tesseract is recognizing a captured photo
   };
 
   // ---------------------------------------------------------------------
@@ -152,6 +154,115 @@
     var parts = m[1].split(';').map(function (s) { return s.trim(); });
     if (parts.length !== 5) return null;
     return { job: parts[0], mfg: parts[1], assy: parts[2], part: parts[3], qty: parts[4] };
+  }
+
+  // ---------------------------------------------------------------------
+  // OCR fallback — guessing the 5 fields from Tesseract's raw recognized
+  // text. Confirmed 2026-08-31 against two real label photos: OCR reliably
+  // gets the general shape right (which line is which field) but makes
+  // digit-level mistakes, especially on the Job number. So this ONLY ever
+  // produces a best-effort guess that pre-fills Manual Entry — the operator
+  // must look at and confirm/correct every field before Continue is enabled
+  // (checkManualComplete() below doesn't know or care where a value came
+  // from). Nothing here is trusted blindly.
+  //
+  // Shapes below are taken directly from real Novameta labels seen in this
+  // build (not invented): Job "010481-1-1" / "010559-16-1", Manufacturing
+  // code "03-D1-1" / "02-D3-106", Assembly "25-33724-00.00.00 SB_A" /
+  // "26-10283-00.VTTD1 SB_A" (the middle segment isn't always numeric),
+  // Part "25-33724-03.28.05_A", Quantity "4vnt." (a bare "<n>vnt." — a
+  // second, letter-prefixed "G1vnt."-style code also appears on labels and
+  // is NOT the quantity, per the operator, so it's deliberately excluded).
+  // ---------------------------------------------------------------------
+  var JOB_CANDIDATE_RE = /\b[0-9A-Za-z]{5,7}-[0-9A-Za-z]{1,3}-[0-9A-Za-z]{1,3}\b/g;
+  var MFG_RE = /\b\d{2}-[A-Za-z]\d-\d{1,3}\b/g;
+  var ASSY_RE = /\b\d{2}-\d{4,5}-[0-9A-Za-z.,]{2,20}\s*SB[_ .]?A\b/gi;
+  var PART_RE = /\b\d{2}-\d{4,5}-[0-9A-Za-z.,]{2,20}[\s_]+(?!SB[_ ]?A\b)[A-Za-z]\b/g;
+  var QTY_RE = /(?:^|[^A-Za-z0-9])(\d{1,4})\s*[a-z]{0,3}nt\.?/i;
+  // Job numbers are digits only, with the letter F sometimes appearing (per the
+  // operator) — no other letters. These are the common OCR digit look-alikes;
+  // anything else left over after this substitution means "not a job number".
+  var JOB_LOOKALIKE = { O: '0', I: '1', L: '1', S: '5', B: '8', Z: '2' };
+
+  function correctJobCandidate(tok) {
+    var clean = tok.toUpperCase().replace(/[^0-9A-Z-]/g, '');
+    var mapped = '';
+    for (var i = 0; i < clean.length; i++) {
+      var ch = clean[i];
+      if (ch === '-' || (ch >= '0' && ch <= '9') || ch === 'F') { mapped += ch; continue; }
+      if (JOB_LOOKALIKE[ch]) { mapped += JOB_LOOKALIKE[ch]; continue; }
+      return null; // some other letter OCR wouldn't reasonably produce from a digit
+    }
+    if (!/^[0-9F]+-[0-9F]+-[0-9F]+$/.test(mapped)) return null;
+    return mapped;
+  }
+
+  function normalizeCodeToken(tok) {
+    return tok.replace(/,/g, '.').replace(/\s*SB[_ .]?A\b/i, ' SB_A')
+      .replace(/[\s_]+([A-Za-z])$/, '_$1').replace(/\s+/g, ' ').trim();
+  }
+
+  function guessFieldsFromOcrText(text) {
+    var t = text || '';
+    var guesses = {};
+
+    var jobMatches = t.match(JOB_CANDIDATE_RE) || [];
+    for (var i = 0; i < jobMatches.length; i++) {
+      var corrected = correctJobCandidate(jobMatches[i]);
+      if (corrected) { guesses.job = corrected; break; }
+    }
+
+    var mfgMatch = t.match(MFG_RE);
+    if (mfgMatch) guesses.mfg = mfgMatch[0].toUpperCase();
+
+    var assyMatch = t.match(ASSY_RE);
+    if (assyMatch) guesses.assy = normalizeCodeToken(assyMatch[0]);
+
+    var partMatch = t.match(PART_RE);
+    if (partMatch) guesses.part = normalizeCodeToken(partMatch[0]);
+
+    var qtyMatch = QTY_RE.exec(t);
+    if (qtyMatch) guesses.qty = qtyMatch[1];
+
+    return guesses;
+  }
+
+  // ---------------------------------------------------------------------
+  // OCR engine (Tesseract.js) — vendored locally under ocr/ so it works
+  // offline once cached and never depends on a CDN. tesseract.min.js (the
+  // main-thread API) is only fetched the first time OCR mode is actually
+  // used, not on every app load; the service worker's normal fetch handler
+  // then caches it (and worker.min.js / the core / the trained data) for
+  // offline reuse, same as every other file in this app.
+  // ---------------------------------------------------------------------
+  var OCR_BASE = 'ocr/';
+  var ocrWorkerPromise = null;
+  function ensureOcrScriptLoaded() {
+    if (window.Tesseract) return Promise.resolve();
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = OCR_BASE + 'tesseract.min.js';
+      s.onload = function () { resolve(); };
+      s.onerror = function () { reject(new Error('Could not load the OCR engine.')); };
+      document.head.appendChild(s);
+    });
+  }
+  function getOcrWorker() {
+    if (!ocrWorkerPromise) {
+      ocrWorkerPromise = ensureOcrScriptLoaded().then(function () {
+        return window.Tesseract.createWorker('eng', 1, {
+          workerPath: OCR_BASE + 'worker.min.js',
+          corePath: OCR_BASE + 'tesseract-core-lstm.wasm.js',
+          langPath: OCR_BASE, // local dir, not a CDN URL — matches the vendored eng.traineddata.gz
+          gzip: true,
+          logger: function () {},
+        });
+      }).catch(function (err) {
+        ocrWorkerPromise = null; // allow retrying on the next shutter press
+        throw err;
+      });
+    }
+    return ocrWorkerPromise;
   }
 
   // ---------------------------------------------------------------------
@@ -304,18 +415,33 @@
 
   $('#shutter-btn').addEventListener('click', function () {
     if (state.mode === 'ocr') {
-      // OCR isn't implemented — capture the label photo and hand off to manual entry.
+      if (state.ocrBusy) return;
       var frame = captureFrameDataUrl();
-      if (frame) {
-        downscaleDataUrl(frame, function (small) {
-          state.photos = [{ id: 'label', label: 'Label', dataUrl: small, removable: false }];
-          state.nextPhotoNum = 1;
-          openManual(true);
+      if (!frame) { state.photos = []; openManual(true, {}); return; }
+
+      downscaleDataUrl(frame, function (small) {
+        state.photos = [{ id: 'label', label: 'Label', dataUrl: small, removable: false }];
+        state.nextPhotoNum = 1;
+      });
+
+      state.ocrBusy = true;
+      $('#shutter-btn').disabled = true;
+      $('#scan-hunt').textContent = 'Reading label…';
+      getOcrWorker()
+        .then(function (worker) { return worker.recognize(frame); })
+        .then(function (result) {
+          var guesses = guessFieldsFromOcrText((result && result.data && result.data.text) || '');
+          state.ocrBusy = false;
+          $('#shutter-btn').disabled = false;
+          openManual(true, guesses);
+        })
+        .catch(function () {
+          // OCR failed to load or run (e.g. first-time fetch of the engine files
+          // failed) — fall back to a plain blank manual entry rather than getting stuck.
+          state.ocrBusy = false;
+          $('#shutter-btn').disabled = false;
+          openManual(true, {});
         });
-      } else {
-        state.photos = [];
-        openManual(true);
-      }
     } else {
       // Force an immediate decode attempt from the current frame.
       if (video.videoWidth) {
@@ -335,18 +461,29 @@
   // ---------------------------------------------------------------------
   // Manual entry screen
   // ---------------------------------------------------------------------
-  function openManual(fromOcr) {
+  function openManual(fromOcr, guesses) {
+    guesses = guesses || {};
     state.manualInfoBanner = !!fromOcr;
+    if (fromOcr) {
+      var hasAnyGuess = VALUE_FIELDS.some(function (id) { return guesses[id]; });
+      $('#manual-info-banner').textContent = hasAnyGuess
+        ? 'Read from the photo — check each value below before continuing.'
+        : "Couldn't confidently read the label from that photo — enter the values below.";
+    }
     $('#manual-info-banner').style.display = fromOcr ? '' : 'none';
-    $('#m-job').value = ''; $('#m-mfg').value = ''; $('#m-assy').value = ''; $('#m-part').value = '';
+    $('#m-job').value = guesses.job || '';
+    $('#m-mfg').value = guesses.mfg || '';
+    $('#m-assy').value = guesses.assy || '';
+    $('#m-part').value = guesses.part || '';
+    $('#m-qty').value = guesses.qty || '';
     checkManualComplete();
     showScreen('manual');
   }
   function checkManualComplete() {
-    var ok = ['#m-job', '#m-mfg', '#m-assy', '#m-part'].every(function (sel) { return $(sel).value.trim().length > 0; });
+    var ok = ['#m-job', '#m-mfg', '#m-assy', '#m-part', '#m-qty'].every(function (sel) { return $(sel).value.trim().length > 0; });
     $('#manual-continue-btn').disabled = !ok;
   }
-  ['#m-job', '#m-mfg', '#m-assy', '#m-part'].forEach(function (sel) {
+  ['#m-job', '#m-mfg', '#m-assy', '#m-part', '#m-qty'].forEach(function (sel) {
     $(sel).addEventListener('input', checkManualComplete);
   });
   $('#manual-back-btn').addEventListener('click', goScan);
@@ -356,6 +493,7 @@
     state.values = {
       job: $('#m-job').value.trim(), mfg: $('#m-mfg').value.trim(),
       assy: $('#m-assy').value.trim(), part: $('#m-part').value.trim(),
+      qty: $('#m-qty').value.trim(),
     };
     // A manually-entered report has no camera photo unless one was captured via the
     // OCR shutter step (already sitting in state.photos in that case).
@@ -391,21 +529,21 @@
 
   function fieldsFilledCount() {
     if (!state.values) return 0;
-    return ['job', 'mfg', 'assy', 'part'].filter(function (id) { return (state.values[id] || '').trim().length; }).length;
+    return VALUE_FIELDS.filter(function (id) { return (state.values[id] || '').trim().length; }).length;
   }
 
   function renderReview() {
     var v = state.values || { job: '', mfg: '', assy: '', part: '' };
     var sourceIsQr = state.source === 'qr';
 
-    $('#review-source-note').textContent = sourceIsQr ? 'QR · 4 fields read' : 'Manual entry';
+    $('#review-source-note').textContent = sourceIsQr ? ('QR · ' + VALUE_FIELDS.length + ' fields read') : 'Manual entry';
     $('#fields-card-title').textContent = sourceIsQr ? 'From the QR code' : 'Entered manually';
     var filled = fieldsFilledCount();
     var badge = $('#fields-badge');
-    badge.textContent = filled + ' / 4 fields';
-    badge.className = 'badge-count ' + (filled === 4 ? 'ok' : 'neutral');
+    badge.textContent = filled + ' / ' + VALUE_FIELDS.length + ' fields';
+    badge.className = 'badge-count ' + (filled === VALUE_FIELDS.length ? 'ok' : 'neutral');
 
-    $('#fields-list').innerHTML = ['job', 'mfg', 'assy', 'part'].map(function (id) {
+    $('#fields-list').innerHTML = VALUE_FIELDS.map(function (id) {
       var editing = state.editingField === id;
       var badgeClass = sourceIsQr ? 'qr' : 'manual';
       var badgeText = sourceIsQr ? 'QR' : 'MANUAL';
@@ -449,7 +587,7 @@
 
     var errBanner = $('#qr-error-banner');
     var missing = [];
-    if (filled < 4) missing.push('fill in the empty fields');
+    if (filled < VALUE_FIELDS.length) missing.push('fill in the empty fields');
     if (!state.busena) missing.push('choose Būsena');
     if (!state.bukle) missing.push('choose Būklė');
     if (missing.length) {
@@ -458,7 +596,7 @@
     } else {
       errBanner.classList.remove('show');
     }
-    $('#submit-btn').disabled = state.posting || filled < 4 || !state.busena || !state.bukle;
+    $('#submit-btn').disabled = state.posting || filled < VALUE_FIELDS.length || !state.busena || !state.bukle;
 
     renderLibrary();
   }
@@ -544,6 +682,9 @@
     if (e.target.matches('[data-field-input]')) {
       var id = e.target.getAttribute('data-field-input');
       state.values[id] = e.target.value;
+      // Keep the Quantity card's "Total on label" in sync if the operator
+      // corrects the scanned/typed quantity up here after the fact.
+      if (id === 'qty') state.qtyTotal = e.target.value;
       state.editingField = null;
       renderReview();
     }
@@ -722,7 +863,7 @@
   // YouTrack project id, confirmed custom fields, and an auth strategy).
   // ---------------------------------------------------------------------
   $('#submit-btn').addEventListener('click', function () {
-    if (state.posting || fieldsFilledCount() < 4) return;
+    if (state.posting || fieldsFilledCount() < VALUE_FIELDS.length) return;
     state.posting = true;
     if (state.kind) bumpUsage(state.kind);
     showScreen('posting');

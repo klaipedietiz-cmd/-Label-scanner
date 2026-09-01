@@ -7,7 +7,11 @@
 // phone can keep serving the very first cached build indefinitely, no matter
 // how many times the other files are re-uploaded. Confirmed 2026-08-27 as the
 // real cause behind several "still looks old after uploading" reports.
-var CACHE = 'label-scanner-v3-cache-2';
+var CACHE = 'label-scanner-v3-cache-4';
+// The OCR engine files under ocr/ (~5.8MB) are deliberately NOT in this precache
+// list — they're fetched lazily the first time OCR mode is actually used, via
+// the normal fetch handler below, which caches them for offline reuse after
+// that. Precaching them here would slow down every single app open.
 var ASSETS = ['./', './index.html', './styles.css', './app.js', './jsQR.js', './manifest.json',
   './icons/icon-192.png', './icons/icon-512.png'];
 
