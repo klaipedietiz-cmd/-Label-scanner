@@ -84,6 +84,12 @@ input, textarea {
 }
 #scan-video.hidden-video { opacity: 0; }
 
+.build-version {
+  position: absolute; top: max(16px, env(safe-area-inset-top)); right: 14px; z-index: 20;
+  font: 700 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: #fff;
+  background: rgba(0,0,0,.55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  padding: 5px 9px; border-radius: 12px; pointer-events: none; min-width: 10px; min-height: 10px;
+}
 .scan-topbar {
   position: absolute;
   top: max(16px, env(safe-area-inset-top));
@@ -285,12 +291,20 @@ input, textarea {
 
 /* ---------- Manual entry screen ---------- */
 #screen-manual .body { flex: 1; overflow: auto; padding: 16px 16px 34px; display: flex; flex-direction: column; gap: 14px; }
+/* Flex items default to flex-shrink:1 with min-height:auto, so a column flex
+   container can squeeze a tall child (like the OCR debug panel below) shorter
+   than its real content instead of letting this scrollable .body grow — and
+   if that child also has overflow:hidden, the squeezed-off part is just gone,
+   not scrollable. Locking every direct child to its natural height fixes that
+   for good, on this screen and any field/card added to it later. */
+#screen-manual .body > * { flex-shrink: 0; }
 .info-banner {
   background: var(--purple-tint-bg); color: #4B3FA3; border: 1px solid #DCD3FF;
   border-radius: 10px; padding: 11px 13px; font-size: 12.5px; line-height: 1.5;
 }
 .ocr-debug {
   border: 1px solid var(--input-border); border-radius: 10px; overflow: hidden; background: #FAFAF8;
+  flex-shrink: 0;
 }
 .ocr-debug-toggle {
   width: 100%; text-align: left; background: none; border: 0; padding: 11px 13px;

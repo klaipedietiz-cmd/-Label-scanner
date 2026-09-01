@@ -15,6 +15,13 @@
   // ---------------------------------------------------------------------
   // Constants
   // ---------------------------------------------------------------------
+  // Shown in the top-right corner of the scan screen, and bumped every time
+  // sw.js's CACHE version is bumped. Added 2026-09-02 after several rounds of
+  // "I updated GitHub but nothing changed" turned out to be genuinely
+  // ambiguous to debug remotely — this makes it possible to just LOOK at the
+  // phone and know for certain whether it's actually running the latest
+  // build, instead of guessing from behavior.
+  var APP_VERSION = 'v12';
   var LABELS = { job: 'Job number', mfg: 'Manuf. code', assy: 'Assembly', part: 'Part no.', qty: 'Quantity' };
   var VALUE_FIELDS = ['job', 'mfg', 'assy', 'part', 'qty']; // quantity mandatory alongside the rest, 2026-08-27
   var DEFAULT_REASONS = ['Weld defect', 'Dimension out of tol.', 'Surface finish', 'Material fault',
@@ -1046,6 +1053,7 @@
   loadReasons();
   startCamera();
   renderScanStatus();
+  $('#build-version').textContent = APP_VERSION;
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(function () { /* offline caching is a nice-to-have */ });
