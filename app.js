@@ -21,7 +21,7 @@
   // ambiguous to debug remotely — this makes it possible to just LOOK at the
   // phone and know for certain whether it's actually running the latest
   // build, instead of guessing from behavior.
-  var APP_VERSION = 'v13';
+  var APP_VERSION = 'v14';
   var LABELS = { job: 'Job number', mfg: 'Manuf. code', assy: 'Assembly', part: 'Part no.', qty: 'Quantity' };
   var VALUE_FIELDS = ['job', 'mfg', 'assy', 'part', 'qty']; // quantity mandatory alongside the rest, 2026-08-27
   var DEFAULT_REASONS = ['Weld defect', 'Dimension out of tol.', 'Surface finish', 'Material fault',
@@ -197,6 +197,17 @@
   // match without risking false positives elsewhere, so it's left blank for
   // the operator to fill in rather than guessed.
   // ---------------------------------------------------------------------
+  // Tried letting "." stand in for "-" in both of these (confirmed 2026-09-02
+  // that Tesseract sometimes reads a label's hyphens as periods on a real
+  // phone capture — e.g. "02-D3-104" came back as "02.03-104"), and also
+  // letting MFG_RE's middle letter be the digit "0" (D/0 are visually close).
+  // REVERTED the same day: both are extremely common inside OTHER fields'
+  // legitimate dotted-decimal codes (e.g. "...00.00.00" in an assembly ref),
+  // so the loosened patterns started matching fragments of THOSE instead —
+  // confirmed via the regression suite, which caught mfg/job guesses
+  // appearing on photos where they must correctly stay blank. Not safe to
+  // loosen without a smarter recognizer for "which field is this really
+  // part of", which regex alone can't do here.
   var JOB_CANDIDATE_RE = /\b[0-9A-Za-z]{5,7}-[0-9A-Za-z]{1,3}-[0-9A-Za-z]{1,3}\b/g;
   var MFG_RE = /\b\d{1,2}-[A-Za-z]\d-\d{1,3}\b/g;
   var ASSY_RE = /\b\d{2}-\d{4,5}-[0-9A-Za-z.,]{2,20}\s*SB[_ .]?A\b/gi;
@@ -290,7 +301,23 @@
         // "automatic page segmentation" (PSM 3) reads noticeably more fields
         // correctly than whatever Tesseract falls back to when this isn't set
         // (that default missed several fields entirely on the same photo).
-        return worker.setParameters({ tessedit_pageseg_mode: '3' }).then(function () { return worker; });
+        //
+        // The load_*_dawg params turn OFF Tesseract's English dictionary bias.
+        // Confirmed 2026-09-02 on a real phone capture: with it on, Tesseract
+        // "corrected" the garbled strokes of "1vnt." into "wont" — an actual
+        // English word — instead of leaving the code as unrecognized
+        // characters. These labels are alphanumeric codes, never English
+        // prose, so that dictionary only ever hurts here.
+        return worker.setParameters({
+          tessedit_pageseg_mode: '3',
+          load_system_dawg: '0',
+          load_freq_dawg: '0',
+          load_punc_dawg: '0',
+          load_number_dawg: '0',
+          load_unambig_dawg: '0',
+          load_bigram_dawg: '0',
+          load_fixed_length_dawgs: '0',
+        }).then(function () { return worker; });
       }).catch(function (err) {
         ocrWorkerPromise = null; // allow retrying on the next shutter press
         throw err;
