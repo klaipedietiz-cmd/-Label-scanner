@@ -21,7 +21,7 @@
   // ambiguous to debug remotely — this makes it possible to just LOOK at the
   // phone and know for certain whether it's actually running the latest
   // build, instead of guessing from behavior.
-  var APP_VERSION = 'v14';
+  var APP_VERSION = 'v15';
   var LABELS = { job: 'Job number', mfg: 'Manuf. code', assy: 'Assembly', part: 'Part no.', qty: 'Quantity' };
   var VALUE_FIELDS = ['job', 'mfg', 'assy', 'part', 'qty']; // quantity mandatory alongside the rest, 2026-08-27
   var DEFAULT_REASONS = ['Weld defect', 'Dimension out of tol.', 'Surface finish', 'Material fault',
@@ -990,6 +990,40 @@
     var open = body.style.display !== 'none';
     body.style.display = open ? 'none' : '';
     $('#ocr-debug-toggle').textContent = 'What OCR saw ' + (open ? '▾' : '▴');
+  });
+  // Copies the exact raw OCR text to the clipboard — added 2026-09-02 after an
+  // operator had to hand-retype it off the phone screen to send it over, which
+  // (understandably) introduced its own transcription mistakes on top of
+  // whatever Tesseract got wrong, making the two impossible to tell apart.
+  // navigator.clipboard needs a "secure context" (https, or this being loaded
+  // as a PWA counts) — falls back to the older execCommand approach if it's
+  // missing, and shows a plain error rather than silently doing nothing if
+  // both fail.
+  $('#ocr-debug-copy').addEventListener('click', function () {
+    var btn = $('#ocr-debug-copy');
+    var text = (state.ocrDebug && state.ocrDebug.text) || '';
+    function showCopied() {
+      var prev = btn.textContent;
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(function () { btn.textContent = prev; btn.classList.remove('copied'); }, 1500);
+    }
+    function fallbackCopy() {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      if (ok) showCopied(); else btn.textContent = 'Copy failed — select text below';
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(showCopied).catch(fallbackCopy);
+    } else {
+      fallbackCopy();
+    }
   });
   function checkManualComplete() {
     var ok = ['#m-job', '#m-mfg', '#m-assy', '#m-part', '#m-qty'].every(function (sel) { return $(sel).value.trim().length > 0; });
