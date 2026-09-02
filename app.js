@@ -21,7 +21,7 @@
   // ambiguous to debug remotely — this makes it possible to just LOOK at the
   // phone and know for certain whether it's actually running the latest
   // build, instead of guessing from behavior.
-  var APP_VERSION = 'v12';
+  var APP_VERSION = 'v13';
   var LABELS = { job: 'Job number', mfg: 'Manuf. code', assy: 'Assembly', part: 'Part no.', qty: 'Quantity' };
   var VALUE_FIELDS = ['job', 'mfg', 'assy', 'part', 'qty']; // quantity mandatory alongside the rest, 2026-08-27
   var DEFAULT_REASONS = ['Weld defect', 'Dimension out of tol.', 'Surface finish', 'Material fault',
@@ -419,14 +419,330 @@
     return { x: x, y: y, w: w, h: h };
   }
 
-  function captureOcrCropDataUrl() {
+  // Returns the on-screen guide box crop as its own <canvas> (not a shared
+  // one — the module-level canvas/ctx above are also used by the QR loop
+  // and the full-frame photo capture, so this must not alias them) so
+  // preprocessOcrCrop() below can read its pixels directly. Falls back to
+  // the full frame if the crop geometry isn't available yet.
+  function captureOcrCropCanvas() {
     if (!video.videoWidth) return null;
     var r = computeOcrCropRect();
-    if (!r) return captureFrameDataUrl(); // geometry unavailable — fall back to the full frame
-    canvas.width = r.w;
-    canvas.height = r.h;
-    ctx.drawImage(video, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
-    return canvas.toDataURL('image/jpeg', 0.92);
+    var out = document.createElement('canvas');
+    var octx = out.getContext('2d');
+    if (!r) {
+      out.width = video.videoWidth; out.height = video.videoHeight;
+      octx.drawImage(video, 0, 0, out.width, out.height);
+      return out;
+    }
+    out.width = r.w; out.height = r.h;
+    octx.drawImage(video, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+    return out;
+  }
+
+  // ---------------------------------------------------------------------
+  // OCR preprocessing — confirmed 2026-09-02 against a real Novameta label
+  // photo as the actual fix for Tesseract reading almost nothing on labels
+  // like theirs, which mix two rendering styles on the SAME label: bold
+  // white text on solid black rounded "badges" (job code, line/cell code,
+  // dimensions, etc.) right next to faint plain gray text on the label's
+  // tan background (job number, assembly ref, quantity, etc.). Tesseract's
+  // own automatic contrast handling can't cope with both styles in one
+  // image — tested extensively (every page-segmentation mode, global
+  // invert, left/right column splitting) with no real improvement.
+  //
+  // This fixes it with plain pixel math on the already-captured crop —
+  // no server, no cloud OCR service, no new vendored library, nothing
+  // that leaves the phone — before handing the result to the exact same
+  // local Tesseract engine already used everywhere else in this file:
+  //   1. Find the dark rounded "badge" rectangles: threshold the grayscale
+  //      crop to a dark/light mask, then connected-component scan it.
+  //   2. Re-threshold each badge's own pixels locally (Otsu) so its text
+  //      becomes black-on-white like the rest of the label instead of
+  //      white-on-black, AND cut it out as its own small image — Tesseract
+  //      reads one clean short line far more reliably than a whole busy
+  //      page (confirmed 2026-09-02: same badge text went from unreadable
+  //      to correct once isolated this way).
+  //   3. Locally adaptive-threshold everything else, since the plain text
+  //      on these labels is faint gray on a busy tan background, not solid
+  //      black on white — a single global threshold either misses it
+  //      entirely or wipes it out along with the background. Then band off
+  //      every gap above/between/below the badges in the same column (the
+  //      plain-text lines live there) and cut those out individually too,
+  //      for the same "read it alone" reason as the badges.
+  // Returns { compositeCanvas, regions: [{canvas, psm}, ...] } — psm is the
+  // Tesseract page-segmentation mode that region should be read with
+  // ('7' = single line for badges, '6' = uniform block for line bands,
+  // which can hold more than one stacked line). Never
+  // throws — falls back to returning just the untouched original crop as
+  // compositeCanvas (with no badge crops) if anything goes wrong, so a
+  // preprocessing bug degrades to "back to how it worked before", not to
+  // a broken capture.
+  // ---------------------------------------------------------------------
+  function otsuThreshold(gray, w, x0, y0, x1, y1) {
+    var hist = new Uint32Array(256), total = 0, x, y, v;
+    for (y = y0; y < y1; y++) {
+      for (x = x0; x < x1; x++) { v = gray[y * w + x]; hist[v]++; total++; }
+    }
+    if (!total) return 128;
+    var sumAll = 0;
+    for (v = 0; v < 256; v++) sumAll += v * hist[v];
+    var sumB = 0, wB = 0, best = 0, bestVar = -1;
+    for (v = 0; v < 256; v++) {
+      wB += hist[v];
+      if (!wB) continue;
+      var wF = total - wB;
+      if (!wF) break;
+      sumB += v * hist[v];
+      var mB = sumB / wB, mF = (sumAll - sumB) / wF;
+      var between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > bestVar) { bestVar = between; best = v; }
+    }
+    return best;
+  }
+
+  function preprocessOcrCrop(srcCanvas) {
+    var fallback = { compositeCanvas: srcCanvas, regions: [] };
+    try {
+      var w = srcCanvas.width, h = srcCanvas.height;
+      if (!w || !h) return fallback;
+      var sctx = srcCanvas.getContext('2d');
+      var src = sctx.getImageData(0, 0, w, h).data;
+      var n = w * h;
+      var gray = new Uint8ClampedArray(n);
+      var i, x, y;
+      for (i = 0; i < n; i++) gray[i] = (src[i * 4] + src[i * 4 + 1] + src[i * 4 + 2]) / 3;
+
+      // --- 1. Dark mask + a touch of dilation to bridge thin anti-aliasing
+      // gaps in a badge's border/fill, then connected-component label it.
+      var DARK = 90;
+      var dark = new Uint8Array(n);
+      for (i = 0; i < n; i++) dark[i] = gray[i] < DARK ? 1 : 0;
+      var dilated = new Uint8Array(n);
+      for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+          var hit = 0;
+          for (var dy = -1; dy <= 1 && !hit; dy++) {
+            var ny = y + dy; if (ny < 0 || ny >= h) continue;
+            for (var dx = -1; dx <= 1; dx++) {
+              var nx = x + dx; if (nx < 0 || nx >= w) continue;
+              if (dark[ny * w + nx]) { hit = 1; break; }
+            }
+          }
+          dilated[y * w + x] = hit;
+        }
+      }
+
+      var labels = new Int32Array(n).fill(-1);
+      var stackX = new Int32Array(n), stackY = new Int32Array(n);
+      var boxes = []; // {minX,minY,maxX,maxY,count}
+      for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+          var startIdx = y * w + x;
+          if (!dilated[startIdx] || labels[startIdx] !== -1) continue;
+          var sp = 0;
+          stackX[sp] = x; stackY[sp] = y; sp++;
+          labels[startIdx] = boxes.length;
+          var minX = x, maxX = x, minY = y, maxY = y, count = 0;
+          while (sp > 0) {
+            sp--;
+            var cx = stackX[sp], cy = stackY[sp];
+            count++;
+            if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
+            if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
+            for (var ddy = -1; ddy <= 1; ddy++) {
+              var yy = cy + ddy; if (yy < 0 || yy >= h) continue;
+              for (var ddx = -1; ddx <= 1; ddx++) {
+                var xx = cx + ddx; if (xx < 0 || xx >= w) continue;
+                var nIdx = yy * w + xx;
+                if (dilated[nIdx] && labels[nIdx] === -1) {
+                  labels[nIdx] = boxes.length;
+                  stackX[sp] = xx; stackY[sp] = yy; sp++;
+                }
+              }
+            }
+          }
+          boxes.push({ minX: minX, minY: minY, maxX: maxX, maxY: maxY, count: count });
+        }
+      }
+
+      // --- Filter to plausible "badge" rectangles: wide, short, mostly-solid
+      // bars — deliberately expressed as FRACTIONS of the crop's own size so
+      // this works the same whether the crop is a small screenshot or a
+      // full-resolution phone photo, not tuned to one specific resolution.
+      var badges = [];
+      for (i = 0; i < boxes.length; i++) {
+        var b = boxes[i];
+        var bw = b.maxX - b.minX + 1, bh = b.maxY - b.minY + 1;
+        var fill = b.count / (bw * bh);
+        if (bw > 0.08 * w && bh > 0.015 * h && bh < 0.25 * h && (bw / bh) > 1.8 && fill > 0.3 && b.count > 0.003 * n) {
+          badges.push(b);
+        }
+      }
+      badges.sort(function (a, b2) { return b2.count - a.count; });
+      if (badges.length > 10) badges = badges.slice(0, 10);
+
+      // --- 2. Build the composite: start from a whole-image adaptive
+      // threshold (handles the faint plain-gray text), then paint each
+      // badge's own locally-Otsu-thresholded region on top of it.
+      var R = Math.max(8, Math.round(0.05 * Math.min(w, h)));
+      var C = 12;
+      // Integral image of gray, for O(1) local-mean lookups.
+      var integral = new Float64Array((w + 1) * (h + 1));
+      for (y = 0; y < h; y++) {
+        var rowSum = 0;
+        for (x = 0; x < w; x++) {
+          rowSum += gray[y * w + x];
+          integral[(y + 1) * (w + 1) + (x + 1)] = integral[y * (w + 1) + (x + 1)] + rowSum;
+        }
+      }
+      function areaSum(x0, y0, x1, y1) { // inclusive-exclusive, clamped by caller
+        return integral[y1 * (w + 1) + x1] - integral[y0 * (w + 1) + x1] - integral[y1 * (w + 1) + x0] + integral[y0 * (w + 1) + x0];
+      }
+
+      var outCanvas = document.createElement('canvas');
+      outCanvas.width = w; outCanvas.height = h;
+      var octx = outCanvas.getContext('2d');
+      var outImg = octx.createImageData(w, h);
+      var od = outImg.data;
+      for (y = 0; y < h; y++) {
+        var y0 = Math.max(0, y - R), y1 = Math.min(h, y + R + 1);
+        for (x = 0; x < w; x++) {
+          var x0 = Math.max(0, x - R), x1b = Math.min(w, x + R + 1);
+          var area = (x1b - x0) * (y1 - y0);
+          var mean = areaSum(x0, y0, x1b, y1) / area;
+          var idx = y * w + x;
+          var val = gray[idx] < (mean - C) ? 0 : 255;
+          var o = idx * 4;
+          od[o] = od[o + 1] = od[o + 2] = val; od[o + 3] = 255;
+        }
+      }
+
+      var badgeRects = [];
+      for (i = 0; i < badges.length; i++) {
+        var bb = badges[i];
+        var inset = Math.max(3, Math.round(0.08 * (bb.maxY - bb.minY + 1)));
+        var rx0 = Math.min(bb.maxX, bb.minX + inset), ry0 = Math.min(bb.maxY, bb.minY + inset);
+        var rx1 = Math.max(rx0 + 1, bb.maxX - inset + 1), ry1 = Math.max(ry0 + 1, bb.maxY - inset + 1);
+        var t = otsuThreshold(gray, w, rx0, ry0, rx1, ry1);
+        for (y = ry0; y < ry1; y++) {
+          for (x = rx0; x < rx1; x++) {
+            var gi = y * w + x;
+            var v2 = gray[gi] > t ? 0 : 255; // text (brighter than badge bg) -> black
+            var o2 = gi * 4;
+            od[o2] = od[o2 + 1] = od[o2 + 2] = v2; od[o2 + 3] = 255;
+          }
+        }
+        // Whiten the thin border ring between the outer bbox and the inset
+        // region so the badge's rounded outline doesn't confuse Tesseract.
+        for (y = bb.minY; y <= bb.maxY; y++) {
+          for (x = bb.minX; x <= bb.maxX; x++) {
+            if (x >= rx0 && x < rx1 && y >= ry0 && y < ry1) continue;
+            var o3 = (y * w + x) * 4;
+            od[o3] = od[o3 + 1] = od[o3 + 2] = 255; od[o3 + 3] = 255;
+          }
+        }
+        badgeRects.push({ x0: rx0, y0: ry0, x1: rx1, y1: ry1 });
+      }
+
+      // --- 3. Plain-text line bands: confirmed 2026-09-02 that even after
+      // the adaptive threshold above, Tesseract's automatic page layout can
+      // still mangle or drop the faint plain-gray lines (job number,
+      // assembly ref, quantity) when reading the whole composite in one
+      // pass — the exact same "isolate it and read it alone" fix that
+      // works for badges also works here. Every gap above/between/below
+      // the badges *in the same column* is one of these lines, so band
+      // them off by column and read each band on its own.
+      //
+      // Only genuinely field-sized badges are used to DEFINE columns —
+      // confirmed 2026-09-02 that a wide footer/barcode strip (a real badge
+      // by the earlier filter, since it's a dark, mostly-solid bar) spans
+      // far enough across the label to bridge the left and right columns
+      // into one, which then bands the two columns' text together into a
+      // single garbled crop. A genuine per-field badge on this label is
+      // never anywhere near half the label's width, so that's the cutoff.
+      var columnBadges = [];
+      for (i = 0; i < badges.length; i++) {
+        if ((badges[i].maxX - badges[i].minX + 1) < 0.5 * w) columnBadges.push(badges[i]);
+      }
+      var columns = []; // [{x0,x1,badges:[...]}]
+      for (i = 0; i < columnBadges.length; i++) {
+        var bd = columnBadges[i];
+        var placedCol = -1;
+        for (var c = 0; c < columns.length; c++) {
+          if (bd.minX < columns[c].x1 && columns[c].x0 < bd.maxX + 1) { placedCol = c; break; }
+        }
+        if (placedCol === -1) { columns.push({ x0: bd.minX, x1: bd.maxX + 1, badges: [bd] }); }
+        else {
+          columns[placedCol].x0 = Math.min(columns[placedCol].x0, bd.minX);
+          columns[placedCol].x1 = Math.max(columns[placedCol].x1, bd.maxX + 1);
+          columns[placedCol].badges.push(bd);
+        }
+      }
+      var lineBandRects = [];
+      for (c = 0; c < columns.length; c++) {
+        var col = columns[c];
+        col.badges.sort(function (a, b3) { return a.minY - b3.minY; });
+        var prevBottom = 0;
+        for (var k = 0; k <= col.badges.length; k++) {
+          var top = (k < col.badges.length) ? col.badges[k].minY : h;
+          if (top - prevBottom > 0.015 * h) {
+            var lx0 = col.x0, ly0 = prevBottom, lx1 = col.x1, ly1 = top;
+            var ink = 0;
+            for (y = ly0; y < ly1; y++) { for (x = lx0; x < lx1; x++) { if (od[(y * w + x) * 4] === 0) ink++; } }
+            if (ink > 0.01 * (lx1 - lx0) * (ly1 - ly0)) lineBandRects.push({ x0: lx0, y0: ly0, x1: lx1, y1: ly1 });
+          }
+          if (k < col.badges.length) prevBottom = col.badges[k].maxY + 1;
+        }
+      }
+      if (lineBandRects.length > 8) lineBandRects = lineBandRects.slice(0, 8);
+
+      // Re-threshold each line band with its OWN local Otsu split, same as
+      // the badges above, instead of leaving it as whatever the single
+      // whole-image adaptive threshold decided. Confirmed 2026-09-02: the
+      // job number line on a real photo was unreadably broken under the
+      // global adaptive threshold (print density/lighting varies enough
+      // line-to-line that one fixed window+constant can't fit every line)
+      // but came out perfectly once given this same fresh local threshold
+      // already proven on badges. Polarity is the opposite of a badge's,
+      // though: here the text is DARKER than its background, not brighter.
+      for (i = 0; i < lineBandRects.length; i++) {
+        var lb = lineBandRects[i];
+        var lt = otsuThreshold(gray, w, lb.x0, lb.y0, lb.x1, lb.y1);
+        for (y = lb.y0; y < lb.y1; y++) {
+          for (x = lb.x0; x < lb.x1; x++) {
+            var li = y * w + x;
+            var lv = gray[li] < lt ? 0 : 255; // text (darker than its own local background) -> black
+            var lo = li * 4;
+            od[lo] = od[lo + 1] = od[lo + 2] = lv; od[lo + 3] = 255;
+          }
+        }
+      }
+
+      // Commit the fully-painted composite once, then cut each region's own
+      // small padded image straight out of it (so every view is pixel-for-
+      // pixel identical to the composite — no separate re-render path to
+      // drift out of sync).
+      octx.putImageData(outImg, 0, 0);
+      var pad = 10;
+      function cutRegion(rct) {
+        var rw = rct.x1 - rct.x0, rh = rct.y1 - rct.y0;
+        var rCanvas = document.createElement('canvas');
+        rCanvas.width = rw + pad * 2;
+        rCanvas.height = rh + pad * 2;
+        var rctx = rCanvas.getContext('2d');
+        rctx.fillStyle = '#fff';
+        rctx.fillRect(0, 0, rCanvas.width, rCanvas.height);
+        rctx.drawImage(outCanvas, rct.x0, rct.y0, rw, rh, pad, pad, rw, rh);
+        return rCanvas;
+      }
+      var regions = [];
+      for (i = 0; i < badgeRects.length; i++) regions.push({ canvas: cutRegion(badgeRects[i]), psm: '7' });
+      for (i = 0; i < lineBandRects.length; i++) regions.push({ canvas: cutRegion(lineBandRects[i]), psm: '6' });
+
+      return { compositeCanvas: outCanvas, regions: regions };
+    } catch (e) {
+      return fallback;
+    }
   }
 
   function handleDecoded(raw) {
@@ -501,23 +817,61 @@
       });
 
       // OCR itself runs on a SEPARATE, cropped capture (just the on-screen guide
-      // box), not the full frame above — see captureOcrCropDataUrl()'s comment.
-      var ocrImage = captureOcrCropDataUrl() || frame;
+      // box), not the full frame above — see computeOcrCropRect()'s comment —
+      // and that crop is then run through preprocessOcrCrop() (see its comment)
+      // before Tesseract ever sees it: this is the fix, confirmed 2026-09-02
+      // against a real label photo, for labels that mix bold white-on-black
+      // "badge" text with faint plain gray text in the same image.
+      var cropCanvas = captureOcrCropCanvas();
+      var pre = cropCanvas ? preprocessOcrCrop(cropCanvas) : null;
+      var compositeCanvas = pre && pre.compositeCanvas;
+      var ocrRegions = (pre && pre.regions) || [];
+      // What "What OCR saw" shows — the normalized image actually handed to
+      // Tesseract, not the raw photo, so the debug panel reflects reality.
+      var debugImageSrc = (compositeCanvas && compositeCanvas.toDataURL('image/png'))
+        || (cropCanvas && cropCanvas.toDataURL('image/jpeg', 0.9)) || frame;
 
       state.ocrBusy = true;
       $('#shutter-btn').disabled = true;
       $('#scan-hunt').textContent = 'Reading label…';
+      var worker;
       getOcrWorker()
-        .then(function (worker) { return worker.recognize(ocrImage); })
-        .then(function (result) {
-          var rawText = (result && result.data && result.data.text) || '';
+        .then(function (w) {
+          worker = w;
+          // Worker's PSM is already '3' (automatic) from getOcrWorker() — right
+          // setting for one pass over the whole normalized label.
+          return worker.recognize(compositeCanvas ? compositeCanvas.toDataURL('image/png') : debugImageSrc);
+        })
+        .then(function (compositeResult) {
+          var compositeText = (compositeResult && compositeResult.data && compositeResult.data.text) || '';
+          if (!ocrRegions.length) return [compositeText];
+          // Re-read each badge/line-band region on its own (in the PSM mode
+          // preprocessOcrCrop picked for it) — confirmed 2026-09-02: Tesseract
+          // reads one clean isolated field far more reliably than the same
+          // text embedded in a whole busy label.
+          return ocrRegions.reduce(function (chain, region) {
+            return chain.then(function (acc) {
+              return worker.setParameters({ tessedit_pageseg_mode: region.psm }).then(function () {
+                return worker.recognize(region.canvas.toDataURL('image/png'));
+              }).then(function (r) {
+                acc.push((r && r.data && r.data.text) || '');
+                return acc;
+              });
+            });
+          }, Promise.resolve([compositeText])).then(function (texts) {
+            // Reset for the next capture, whatever mode this one ends in.
+            return worker.setParameters({ tessedit_pageseg_mode: '3' }).then(function () { return texts; });
+          });
+        })
+        .then(function (texts) {
+          var rawText = texts.join('\n');
           var guesses = guessFieldsFromOcrText(rawText);
           // Downscale ONLY the debug-preview copy — a real camera's native crop can be
           // several MB as a data URL, which some phones' browsers appear to choke on
           // when set as an <img src> (confirmed 2026-09-02: everything after that image
           // in the panel silently failed to render on a real device). OCR itself still
-          // runs on the full-resolution ocrImage above, unaffected by this.
-          downscaleDataUrl(ocrImage, function (smallImg) {
+          // ran on the full-resolution images above, unaffected by this.
+          downscaleDataUrl(debugImageSrc, function (smallImg) {
             state.ocrDebug = { image: smallImg, text: rawText };
             state.ocrBusy = false;
             $('#shutter-btn').disabled = false;
@@ -529,7 +883,7 @@
           // failed) — fall back to a plain blank manual entry rather than getting stuck.
           // Still record what was attempted so "What OCR saw" can show the real error
           // instead of silently leaving the operator with an unexplained blank form.
-          downscaleDataUrl(ocrImage, function (smallImg) {
+          downscaleDataUrl(debugImageSrc, function (smallImg) {
             state.ocrDebug = { image: smallImg, text: '(OCR did not run: ' + ((err && err.message) || err || 'unknown error') + ')' };
             state.ocrBusy = false;
             $('#shutter-btn').disabled = false;
@@ -1045,6 +1399,20 @@
     renderScanStatus();
     renderScanError();
     showScreen('scan');
+  }
+
+  // Exposes a couple of internal OCR functions on window, ONLY when a test
+  // harness sets window.__OCR_TEST_HOOKS__ = true before this file loads.
+  // No normal page load ever sets that flag, so this is a no-op for every
+  // real user — it exists purely so automated tests can exercise the real
+  // preprocessing/guessing code directly (pixel work needs an actual
+  // browser canvas, which is why this can't just be unit-tested in Node).
+  if (window.__OCR_TEST_HOOKS__) {
+    window.__ocrTestHooks = {
+      preprocessOcrCrop: preprocessOcrCrop,
+      guessFieldsFromOcrText: guessFieldsFromOcrText,
+      getOcrWorker: getOcrWorker,
+    };
   }
 
   // ---------------------------------------------------------------------
